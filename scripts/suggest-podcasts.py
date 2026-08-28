@@ -130,12 +130,12 @@ def main():
     excluded_feeds = get_subscribed_feed_urls(db) | get_existing_suggestion_feed_urls(db)
 
     print(f"[suggest] Subscriptions: {sub_titles}")
-    print("[suggest] Asking Claude for search queries...")
+    print("[suggest] Asking the agent for search queries...")
 
     try:
         queries = get_search_queries(subs_context)
     except Exception as e:
-        print(f"[suggest] Claude query generation failed: {e}", file=sys.stderr)
+        print(f"[suggest] Query generation failed: {e}", file=sys.stderr)
         sys.exit(1)
 
     print(f"[suggest] Queries: {queries}")
@@ -155,7 +155,7 @@ def main():
             continue
         excluded_feeds.add(pick["feed_url"])
 
-        print(f"[suggest] Pick: {pick['title']} — asking Claude for reason...")
+        print(f"[suggest] Pick: {pick['title']} — asking the agent for reason...")
         try:
             reason = get_reason(sub_titles, pick)
         except Exception as e:
