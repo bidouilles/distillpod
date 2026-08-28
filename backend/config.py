@@ -35,7 +35,19 @@ class Settings(BaseSettings):
     port: int = 8124
     frontend_origin: str = "http://localhost:5173"
 
-    # Transcription
+    # Transcription — "auto" picks voxtral when a Mistral key is present.
+    stt_backend: str = "auto"                # auto / voxtral / whisper
+    stt_model: str = "voxtral-mini-latest"   # voxtral only
+    stt_language: str = ""                   # ISO code, e.g. "fr"; empty = auto-detect
+    mistral_api_key: str = ""
+
+    @property
+    def stt(self) -> str:
+        if self.stt_backend in ("voxtral", "whisper"):
+            return self.stt_backend
+        return "voxtral" if self.mistral_api_key else "whisper"
+
+    # faster-whisper (used when stt resolves to "whisper")
     whisper_model: str = "medium"           # base / small / medium / large-v3
     whisper_device: str = "cpu"
     gist_context_seconds: int = 60        # seconds of audio captured per shot

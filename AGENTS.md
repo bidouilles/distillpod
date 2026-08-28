@@ -6,7 +6,7 @@ AI-powered podcast player with transcription, AI chat, gist extraction, ad remov
 
 - **Backend:** Python 3 / FastAPI / uvicorn / aiosqlite (SQLite with WAL)
 - **Frontend:** React 18 / TypeScript / Vite / Tailwind CSS / Zustand
-- **AI:** Codex CLI (`codex exec`) called via subprocess through `services/llm.py`; faster-whisper for transcription
+- **AI:** Codex CLI (`codex exec`) called via subprocess through `services/llm.py`; transcription via `services/stt.py` (Mistral Voxtral or faster-whisper)
 - **Auth:** Google OAuth2 with JWT session cookies (authlib + python-jose)
 - **External API:** Podcast Index API for search/discovery
 
@@ -67,6 +67,10 @@ Env file: `/etc/distillpod.env` (mode 600, owned by root, loaded via `Environmen
 | `GOOGLE_CLIENT_SECRET` | Google OAuth2 client secret |
 | `ALLOWED_EMAILS` | Comma-separated email allowlist |
 | `SESSION_SECRET` | JWT signing secret (`openssl rand -hex 32`) |
+| `STT_BACKEND` | Transcription: `auto` (default), `voxtral`, or `whisper` |
+| `MISTRAL_API_KEY` | Mistral key; its presence makes `auto` pick Voxtral |
+| `STT_MODEL` | Voxtral model (default: `voxtral-mini-latest`) |
+| `STT_LANGUAGE` | ISO code e.g. `fr`; empty = auto-detect |
 | `WHISPER_MODEL` | Whisper model size (default: `medium`) |
 | `WHISPER_DEVICE` | Whisper device (default: `cpu`) |
 | `TELEGRAM_BOT_TOKEN` | Telegram notifications (optional) |
@@ -90,10 +94,11 @@ backend/
     auth.py            # Google OAuth2 login/logout
   services/
     llm.py             # Agent CLI adapter — the ONLY place a model is invoked
+    stt.py             # Speech-to-text adapter — Voxtral or faster-whisper
     podcast_index.py   # Podcast Index API client
     rss.py             # RSS feed parser
     downloader.py      # Episode audio downloader
-    transcriber.py     # faster-whisper transcription
+    transcriber.py     # transcription orchestration + DB writes (STT lives in stt.py)
     snip_engine.py     # Gist extraction from transcript
     ad_detector.py     # Ad segment detection
     chapterizer.py     # Auto-chapter generation
@@ -118,5 +123,12 @@ scripts/
   longer strip markdown fences.
 - Each call runs with `--sandbox read-only --ephemeral` in a throwaway working
   directory, so the model cannot see or act on this repo.
+- Transcription goes through `services/stt.py`, which must return
+  `[{word, start, end}]` with the leading space kept on each word. Distill
+  windows, the ad segmenter and chapter seeks all index into that array, so a
+  backend that only returns phrase-level spans cannot be plugged in as-is.
+- Voxtral quantises timings to 0.1s and occasionally emits `end < start`;
+  `stt._normalise` clamps that. Audio is downmixed to 16 kHz mono before upload,
+  which keeps long episodes under the size limit and costs no accuracy.
 - Background tasks (transcription, research) run via `asyncio.create_task` -- they do not survive restarts.
 - Git remote: `upstream` -> `https://github.com/andrepaim/distillpod.git` (fork of andrepaim/distillpod).

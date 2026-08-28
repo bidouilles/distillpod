@@ -116,21 +116,31 @@ When you tap Play:
 
 1. `POST /player/play` triggers a background download + transcription task
 2. The episode MP3 is downloaded to `/media/` (streaming, skips if cached)
-3. faster-whisper transcribes with `word_timestamps=True` (CPU, `medium` model by default)
+3. `services/stt.py` transcribes to word-level timestamps
 4. Word-level timestamps saved to `transcripts` table
 5. Ad detection runs non-fatally after transcription
 6. The ⚗️ Distill button unlocks when `transcript_status = done`
 
-#### Model trade-offs
+#### Choosing a transcription backend
 
-| Model | Speed (CPU) | Accuracy |
+`STT_BACKEND=auto` (the default) uses **Voxtral** when `MISTRAL_API_KEY` is set,
+and falls back to **faster-whisper** otherwise. Set it to `voxtral` or `whisper`
+to pin one explicitly — an explicit `whisper` wins even if a key is present.
+
+| | Voxtral (`voxtral-mini-latest`) | faster-whisper |
 |---|---|---|
-| `base` | Fastest | Good |
-| `small` | Fast | Better |
-| `medium` | Moderate | Very good (default) |
-| `large-v3` | Slow | Best |
+| Speed | ~35s for a 27-minute episode | 10–20 min on CPU for the same |
+| Privacy | Audio is uploaded to Mistral | Never leaves your server |
+| Cost | Per-minute API billing | Free, but pins a CPU core |
+| Non-English | Strong | Needs `large-v3` to compete |
+| Install | Nothing | ~1.5GB model + CTranslate2 |
 
-Set via `WHISPER_MODEL` in `.env`.
+Audio is downmixed to 16 kHz mono before upload, which keeps long episodes under
+the API size limit and costs nothing in accuracy — speech recognition gains
+nothing from stereo or music-grade bitrates.
+
+Whisper model sizes (`WHISPER_MODEL`): `base` fastest, `small`, `medium`
+(default), `large-v3` best. Set `STT_LANGUAGE=fr` to skip auto-detection.
 
 ---
 
@@ -143,7 +153,7 @@ Set via `WHISPER_MODEL` in `.env`.
 | State | [Zustand](https://zustand-demo.pmnd.rs/) |
 | Backend | [FastAPI](https://fastapi.tiangolo.com/) + [uvicorn](https://www.uvicorn.org/) |
 | Database | [aiosqlite](https://aiosqlite.omnilib.dev/) — async SQLite (WAL mode) |
-| Transcription | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — local speech-to-text (CTranslate2, int8) |
+| Transcription | [Voxtral](https://mistral.ai/) hosted STT, or [faster-whisper](https://github.com/SYSTRAN/faster-whisper) locally (CTranslate2, int8) |
 | AI | Codex CLI (`codex exec`), or Claude CLI (`claude --print`) |
 | RSS | [feedparser](https://feedparser.readthedocs.io/) |
 | HTTP client | [httpx](https://www.python-httpx.org/) |
@@ -190,7 +200,8 @@ Set via `WHISPER_MODEL` in `.env`.
 | `backend/routers/chat.py` | Episode Q&A — init, message, history |
 | `backend/routers/research.py` | Trigger + poll research reports |
 | `backend/services/downloader.py` | Async MP3 download to `/media/` |
-| `backend/services/transcriber.py` | faster-whisper, word-level timestamps, async background task |
+| `backend/services/stt.py` | Speech-to-text adapter — Voxtral or faster-whisper |
+| `backend/services/transcriber.py` | Transcription orchestration, DB writes, async background task |
 | `backend/services/llm.py` | Agent CLI adapter — the only place a model is invoked |
 | `backend/services/snip_engine.py` | Timestamp window lookup + distillation |
 | `backend/services/ad_detector.py` | Ad classification + ffmpeg audio surgery |
@@ -211,7 +222,7 @@ Set via `WHISPER_MODEL` in `.env`.
 - Node.js 18+
 - ffmpeg (for ad-free audio generation)
 - [Codex CLI](https://developers.openai.com/codex/cli) installed and authenticated (or the [Claude CLI](https://claude.ai/code) with `LLM_BACKEND=claude`)
-- A VPS with a few GB of RAM (faster-whisper `medium` uses ~1.5GB)
+- A VPS with a few GB of RAM if you use faster-whisper (`medium` uses ~1.5GB); far less with Voxtral
 
 ### Quick start
 
@@ -249,6 +260,10 @@ Copy `.env.example` to `backend/.env` and edit:
 | `TAVILY_API_KEY` | No | Enables deep research reports |
 | `TELEGRAM_BOT_TOKEN` | No | Telegram notifications |
 | `TELEGRAM_CHAT_ID` | No | Telegram chat ID |
+| `STT_BACKEND` | No | `auto` (default), `voxtral`, or `whisper` |
+| `MISTRAL_API_KEY` | No | Mistral key; its presence makes `auto` choose Voxtral |
+| `STT_MODEL` | No | Voxtral model (default `voxtral-mini-latest`) |
+| `STT_LANGUAGE` | No | ISO code e.g. `fr`; empty auto-detects |
 | `WHISPER_MODEL` | No | Whisper model size: `base`, `small`, `medium` (default), `large-v3` |
 | `MEDIA_DIR` | No | Path for downloaded MP3s (default: `media/`) |
 | `REPORTS_DIR` | No | Path for HTML research reports (default: `reports/`) |
@@ -311,7 +326,7 @@ The daily sync pipeline per subscription:
 1. Reset stuck `processing` episodes
 2. Fetch latest 5 RSS episodes
 3. Download recent episodes (≤48h old)
-4. Transcribe with faster-whisper
+4. Transcribe via `services/stt.py`
 5. Detect + remove ads (non-fatal)
 6. Generate chapters + episode summary
 7. Telegram alert on errors

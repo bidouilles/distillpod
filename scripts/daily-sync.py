@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 from database import get_db
 from services.rss import fetch_episodes
 from services.downloader import download_episode
-from services.transcriber import _transcribe_sync
+from services import stt
 
 logging.basicConfig(
     level=logging.INFO,
@@ -138,7 +138,7 @@ async def process_subscription(podcast_id: str, feed_url: str, title: str) -> di
             log.info(f"  🎙  Transcribing: {ep.title[:70]}")
             try:
                 loop = asyncio.get_event_loop()
-                words = await loop.run_in_executor(None, _transcribe_sync, str(local_path))
+                words = await loop.run_in_executor(None, stt.transcribe, str(local_path))
 
                 await db.execute(
                     """INSERT OR REPLACE INTO transcripts

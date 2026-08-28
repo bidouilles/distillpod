@@ -61,6 +61,10 @@ DistillPod is a self-hosted podcast client with AI-powered features: on-device t
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google OAuth |
 | `ALLOWED_EMAILS` | Comma-separated allowlist (`<your-email@gmail.com>`) |
 | `SESSION_SECRET` | HMAC key for session cookies |
+| `STT_BACKEND` | `auto` — voxtral when `MISTRAL_API_KEY` is set, else whisper |
+| `MISTRAL_API_KEY` | Mistral key for Voxtral |
+| `STT_MODEL` | `voxtral-mini-latest` |
+| `STT_LANGUAGE` | ISO code, empty = auto-detect |
 | `WHISPER_MODEL` | `medium` (faster-whisper model size) |
 | `WHISPER_DEVICE` | `cpu` |
 | `TELEGRAM_BOT_TOKEN` | Tia do Zap bot token (notifications) |
@@ -206,7 +210,7 @@ Research runs as a multi-turn agent pipeline (see §5). Generates an HTML report
 |---|---|---|
 | `episode_id` | TEXT PK | |
 | `words_json` | TEXT | `[{word, start, end}, ...]` — word-level timestamps |
-| `language` | TEXT | `"auto"` (faster-whisper detects) |
+| `language` | TEXT | `STT_LANGUAGE`, or `"auto"` when unset |
 | `created_at` | TEXT | ISO timestamp |
 
 ### `gists`
@@ -273,18 +277,28 @@ Downloads episode audio via streaming HTTP (`httpx`).
 File stored under `/path/to/distillpod/media/`.  
 Idempotent — skips if file already exists.
 
-### 5.2 Transcriber (`services/transcriber.py`)
+### 5.2 Transcription (`services/stt.py` + `services/transcriber.py`)
 
-Uses **faster-whisper** (OpenAI Whisper, CTranslate2 backend) running on CPU with `int8` quantization.  
-Model lazy-loaded on first use and cached globally (`_model` singleton).  
-Configured: `medium` model (reasonable accuracy/speed tradeoff on CPU).
+`stt.py` owns the speech-to-text call; `transcriber.py` owns the DB writes and
+the ad-detection hand-off. Two backends, selected by `settings.stt`:
+
+- **voxtral** — Mistral's hosted API. Audio is downmixed to 16 kHz mono with
+  ffmpeg, then POSTed to `/v1/audio/transcriptions` with
+  `timestamp_granularities=word`. Without that flag the API returns coarse
+  phrase spans, which the distill window and ad segmenter cannot use. A
+  27-minute episode takes ~35s. Timings are quantised to 0.1s, which can round a
+  short word's `end` below its `start`; `_normalise` clamps that.
+- **whisper** — faster-whisper (CTranslate2, `int8`) on CPU. Lazy-imported and
+  cached in a `_model` singleton, so a Voxtral-only deployment need not install
+  the model at all. Same episode: 10–20 minutes.
 
 **Async flow:**
 ```
 POST /player/play
   └→ asyncio.create_task(_bg_transcribe)
-       └→ loop.run_in_executor(None, _transcribe_sync, audio_path)
-            └→ WhisperModel.transcribe(word_timestamps=True)
+       └→ loop.run_in_executor(None, stt.transcribe, audio_path)
+            └→ voxtral: ffmpeg downmix → Mistral API → segments → words
+               whisper: WhisperModel.transcribe(word_timestamps=True)
             └→ Save words_json to DB
             └→ Mark transcript_status = 'done'
             └→ [Non-fatal] ad_detector.detect_ads()
@@ -452,7 +466,7 @@ Full pipeline per subscription:
 2. **RSS fetch** — latest 5 episodes per subscription
 3. **New episode insert** — `INSERT OR IGNORE` into `episodes`
 4. **Download** — streaming HTTP download for recent episodes (≤48h old)
-5. **Transcription** — faster-whisper in thread pool, word-level timestamps saved
+5. **Transcription** — `stt.transcribe` in thread pool, word-level timestamps saved
 6. **Ad detection** — the model classifies transcript → ffmpeg cuts ad-free version
 7. **Chapterization** — the model generates chapters + episode summary
 8. **Error report** — Telegram alert if any episodes ended in `error` state
@@ -584,7 +598,7 @@ POST /player/play  (user taps Play)
   │
   └─→ background task: transcribe_episode()
         │
-        ├─→ WhisperModel.transcribe() [CPU, ~1–5 min]
+        ├─→ stt.transcribe() [voxtral ~35s, or whisper on CPU ~10–20 min]
         │
         ├─→ INSERT transcripts (words_json)
         │

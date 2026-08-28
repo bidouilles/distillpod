@@ -1,6 +1,9 @@
 """
-Transcription via faster-whisper.
-Runs in a background thread (CPU-bound) and stores word-level timestamps in DB.
+Episode transcription orchestration: run the STT backend, store word-level
+timestamps, then kick off ad detection.
+
+The transcription itself lives in services/stt.py — this module only cares that
+it gets back [{word, start, end}, ...].
 """
 import asyncio
 import json
@@ -8,34 +11,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 import aiosqlite
-from faster_whisper import WhisperModel
 from config import settings
 from database import get_db
-
-# Lazy-load model (expensive to init)
-_model: Optional[WhisperModel] = None
-
-def _get_model() -> WhisperModel:
-    global _model
-    if _model is None:
-        _model = WhisperModel(
-            settings.whisper_model,
-            device=settings.whisper_device,
-            compute_type="int8",
-        )
-    return _model
-
-
-def _transcribe_sync(audio_path: str) -> list[dict]:
-    """Synchronous transcription — runs in thread pool."""
-    model = _get_model()
-    segments, _ = model.transcribe(audio_path, word_timestamps=True)
-    words = []
-    for segment in segments:
-        if segment.words:
-            for w in segment.words:
-                words.append({"word": w.word, "start": w.start, "end": w.end})
-    return words
+from services import stt
 
 
 async def transcribe_episode(episode_id: str, audio_path: Path) -> None:
@@ -52,9 +30,9 @@ async def transcribe_episode(episode_id: str, audio_path: Path) -> None:
         )
         await db.commit()
 
-        # Run CPU-bound transcription in thread pool
+        # Off the event loop: CPU-bound for whisper, a long HTTP call for voxtral
         loop = asyncio.get_event_loop()
-        words = await loop.run_in_executor(None, _transcribe_sync, str(audio_path))
+        words = await loop.run_in_executor(None, stt.transcribe, str(audio_path))
 
         words_json = json.dumps(words)
 
@@ -62,7 +40,8 @@ async def transcribe_episode(episode_id: str, audio_path: Path) -> None:
         await db.execute(
             """INSERT OR REPLACE INTO transcripts (episode_id, words_json, language, created_at)
                VALUES (?, ?, ?, ?)""",
-            (episode_id, words_json, "auto", datetime.now(timezone.utc).isoformat())
+            (episode_id, words_json, settings.stt_language or "auto",
+             datetime.now(timezone.utc).isoformat())
         )
         await db.execute(
             "UPDATE episodes SET transcript_status = 'done' WHERE id = ?",
