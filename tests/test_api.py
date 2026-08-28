@@ -292,3 +292,19 @@ class TestProtectedRoutes:
         from middleware.auth import PROTECTED_PREFIXES
         for prefix in ("/gists", "/podcasts", "/player", "/chat", "/research", "/tags", "/search"):
             assert prefix in PROTECTED_PREFIXES, f"{prefix} is reachable without a session"
+
+
+class TestTestModeConsistency:
+    """TEST_MODE must mean one thing. It already bypasses the middleware for
+    every protected route, so /auth/me gating the SPA behind a login wall would
+    leave a wide-open backend behind a door nobody can open."""
+
+    @pytest.mark.asyncio
+    async def test_auth_me_reports_a_user_in_test_mode(self, client):
+        r = await client.get("/auth/me")
+        assert r.status_code == 200
+        assert r.json()["email"]
+
+    @pytest.mark.asyncio
+    async def test_protected_route_open_in_test_mode(self, client):
+        assert (await client.get("/podcasts/feed")).status_code == 200

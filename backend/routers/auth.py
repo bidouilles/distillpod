@@ -80,6 +80,13 @@ async def google_callback(request: Request, code: str, state: str):
 @router.get("/me")
 async def get_me(request: Request):
     """Return current logged-in user from session cookie, or 401."""
+    # TEST_MODE bypasses auth on every protected API route, so gating the SPA
+    # behind a login wall here just means a wide-open backend behind a door
+    # that cannot be opened. Report the same synthetic user the middleware
+    # already injects, so TEST_MODE means one thing rather than two.
+    if settings.test_mode:
+        return {"email": "test@example.com", "name": "Test User", "picture": ""}
+
     token = request.cookies.get("distillpod_session")
     if not token:
         return JSONResponse({"detail": "Unauthorized"}, status_code=401)
