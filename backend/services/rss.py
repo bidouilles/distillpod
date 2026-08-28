@@ -3,6 +3,7 @@ import feedparser
 import httpx
 from datetime import datetime
 from models import Episode
+from ids import safe_episode_id
 
 
 async def fetch_episodes(feed_url: str, podcast_id: str, limit: int = 50) -> list[Episode]:
@@ -46,7 +47,7 @@ async def fetch_episodes(feed_url: str, podcast_id: str, limit: int = 50) -> lis
             published_at = datetime(*entry.published_parsed[:6])
 
         episodes.append(Episode(
-            id=entry.get("id", audio_url),
+            id=safe_episode_id(entry.get("id", audio_url)),
             podcast_id=podcast_id,
             title=entry.get("title", "Untitled"),
             description=entry.get("summary", ""),
