@@ -3,7 +3,9 @@
 > A self-hosted, mobile-first podcast app with AI-powered features: transcription, distillations, ad detection, chapter generation, episode chat, and deep research reports. No per-call API costs — all AI runs via a coding-agent CLI through your existing subscription.
 
 > [!NOTE]
-> **This is a fork of [andrepaim/distillpod](https://github.com/andrepaim/distillpod).** Upstream drives its AI features with the Claude CLI; this fork drives them with the **Codex CLI** instead. Both backends are supported — set `LLM_BACKEND=claude` to get the original behaviour. The "Why I Built This" section below is the upstream author's.
+> **This is a fork of [andrepaim/distillpod](https://github.com/andrepaim/distillpod).** It makes both AI workloads swappable so you can fit them to your server:
+> **reasoning** runs on the **Codex CLI** by default (`LLM_BACKEND=claude` restores upstream's Claude CLI), and **transcription** uses **Mistral Voxtral** when a `MISTRAL_API_KEY` is present, falling back to local faster-whisper otherwise (`STT_BACKEND` pins either).
+> See [Choosing your backends](#choosing-your-backends). The "Why I Built This" section below is the upstream author's.
 
 ---
 
@@ -29,6 +31,74 @@ So I cut out the middleman.
 DistillPod runs entirely on your own server. The AI features — distillations, ad detection, chapters, chat, research — all go through a coding-agent CLI using your existing subscription. No separate API key, no extra per-call charges on top of what you already pay, no data leaving your infrastructure to a third-party podcast app, no feature flags behind a paywall.
 
 If you have a VPS and a Codex (or Claude) subscription, you already have everything you need to run this.
+
+---
+
+## Choosing your backends
+
+Both AI workloads are swappable, because the right answer depends entirely on
+what your server can actually do. Neither is hardcoded — each is one env var,
+and you can mix them freely.
+
+### 1. Reasoning — distillations, chat, ad detection, chapters, research
+
+Everything goes through `backend/services/llm.py`, which shells out to a coding-agent
+CLI authenticated by your existing subscription. No API key, no per-call billing.
+
+| `LLM_BACKEND` | Uses | Choose when |
+|---|---|---|
+| `codex` *(default)* | `codex exec` | You have a Codex subscription |
+| `claude` | `claude --print` | You have a Claude subscription (upstream's original setup) |
+
+```bash
+LLM_BACKEND=codex     # npm i -g @openai/codex && codex login
+LLM_BACKEND=claude    # npm i -g @anthropic-ai/claude-code && claude login
+```
+
+Both need Node on the box and a one-time interactive login. Callers never know
+which is in use, so switching is genuinely a one-line change.
+
+### 2. Transcription — turning audio into a word-level transcript
+
+This is the one that will actually strain a small VPS. Everything downstream
+reads the transcript, so a weak one silently degrades every feature.
+
+| `STT_BACKEND` | Uses | Cost on your server |
+|---|---|---|
+| `auto` *(default)* | Voxtral if `MISTRAL_API_KEY` is set, else faster-whisper | — |
+| `voxtral` | Mistral hosted API | Negligible: an ffmpeg downmix and one HTTP request |
+| `whisper` | faster-whisper, locally | ~1.5GB RAM for `medium`, pins a core for minutes |
+
+**On a 27-minute episode:** Voxtral takes **~35s**. faster-whisper `small` takes
+**~7 min** on a warm Apple M-series core (~3.9× realtime) — and a shared vCPU
+with `medium` or `large-v3` will be considerably slower again.
+
+```bash
+# Small VPS, or non-English podcasts: let Mistral do the heavy lifting
+MISTRAL_API_KEY=sk-...
+STT_LANGUAGE=fr          # optional; skips auto-detection
+
+# Everything stays on your box — no key needed
+STT_BACKEND=whisper
+WHISPER_MODEL=medium
+```
+
+### Which should you pick?
+
+- **Small or shared VPS** (1–2 vCPU, ≤2GB RAM) — use Voxtral. Local Whisper will
+  either swap itself to death or make transcription take longer than listening
+  to the episode.
+- **Non-English podcasts** — use Voxtral. It is markedly better on French than
+  `medium`, and you would otherwise need `large-v3`, which is heavier still.
+- **Audio must not leave your server** — use `STT_BACKEND=whisper`. This is the
+  one hard trade-off: Voxtral uploads the episode audio to Mistral. Setting the
+  backend explicitly means a stray `MISTRAL_API_KEY` in the environment can
+  never silently override that choice.
+- **No Mistral billing** — use whisper, and size the model to your CPU.
+
+Transcription is the only stage that leaves your infrastructure, and only if you
+choose Voxtral. The reasoning CLI always runs locally against your own
+subscription either way.
 
 ---
 
