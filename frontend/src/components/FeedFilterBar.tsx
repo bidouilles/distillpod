@@ -22,7 +22,7 @@ const STATUSES = [
   { key: "downloaded",  label: "Downloaded" },
 ];
 
-function Chip({ active, onClick, children }: {
+export function Chip({ active, onClick, children }: {
   active: boolean; onClick: () => void; children: React.ReactNode;
 }) {
   return (
