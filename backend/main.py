@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 from config import settings
 from database import init_db
-from routers import podcasts, player, gists
+from routers import podcasts, player, gists, tags
 from routers import auth as auth_router
 from routers.chat import router as chat_router
 from routers.research import router as research_router
@@ -34,6 +34,7 @@ app.add_middleware(AuthMiddleware)
 
 app.include_router(auth_router.router)
 app.include_router(podcasts.router)
+app.include_router(tags.router)
 app.include_router(player.router)
 app.include_router(gists.router)
 app.include_router(chat_router)

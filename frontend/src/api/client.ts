@@ -29,8 +29,35 @@ export const subscribe = (podcastId: string, feedUrl: string, title: string, ima
 export const unsubscribe = (podcastId: string) =>
   req("DELETE", `/podcasts/subscriptions/${podcastId}`);
 
-export const getFeed = () =>
-  req<FeedEpisode[]>("GET", "/podcasts/feed");
+export interface FeedFilters {
+  q?: string;
+  tag_id?: string;
+  podcast_id?: string;
+  status?: string;
+  limit?: number;
+}
+
+export const getFeed = (filters: FeedFilters = {}) => {
+  // Filtering runs server-side: the feed is capped, so filtering an
+  // already-truncated page would hide matches older than the cap.
+  const qs = new URLSearchParams();
+  Object.entries(filters).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
+  });
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return req<FeedEpisode[]>("GET", `/podcasts/feed${suffix}`);
+};
+
+// --- Tags ---
+export const getTags = () => req<Tag[]>("GET", "/tags");
+
+export const createTag = (name: string) =>
+  req<Tag>("POST", "/tags", { name });
+
+export const deleteTag = (id: string) => req("DELETE", `/tags/${id}`);
+
+export const setPodcastTags = (podcastId: string, tagIds: string[]) =>
+  req<Tag[]>("PUT", `/tags/podcast/${podcastId}`, { tag_ids: tagIds });
 
 export const getSuggestions = () =>
   req<Suggestion[]>("GET", "/podcasts/suggestions");
@@ -73,9 +100,14 @@ export interface Podcast {
   id: string; title: string; author: string; description: string;
   image_url?: string; feed_url: string; episode_count?: number;
 }
+export interface Tag {
+  id: string;
+  name: string;
+  podcast_count?: number;
+}
 export interface Subscription {
   podcast_id: string; feed_url: string; title: string; image_url?: string;
-  subscribed_at: string;
+  subscribed_at: string; tags?: Tag[];
 }
 export interface Episode {
   id: string; podcast_id: string; title: string; description?: string;

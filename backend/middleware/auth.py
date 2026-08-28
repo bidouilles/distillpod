@@ -7,7 +7,11 @@ from config import settings
 
 # Only these API prefixes require a valid session.
 # Everything else (frontend SPA, static files, auth routes) passes through freely.
-PROTECTED_PREFIXES = ["/gists", "/podcasts", "/player"]
+#
+# /chat and /research were missing here: both were reachable without a session
+# on a public deployment, letting anyone read episode conversations, post
+# messages that spend the owner's model subscription, and queue research jobs.
+PROTECTED_PREFIXES = ["/gists", "/podcasts", "/player", "/chat", "/research", "/tags"]
 
 
 def create_session_token(user: dict) -> str:

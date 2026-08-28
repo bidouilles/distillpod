@@ -96,6 +96,26 @@ CREATE TABLE IF NOT EXISTS chapters (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chapters_episode ON chapters(episode_id, start_time);
+
+-- User-assigned tags on subscriptions ("tech", "français", "long-form", ...).
+-- Server-side rather than local storage so a library organised on the phone is
+-- the same library on the laptop.
+CREATE TABLE IF NOT EXISTS tags (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+-- Case-insensitive uniqueness: "Tech" and "tech" are one tag, not two.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_name ON tags(name COLLATE NOCASE);
+
+CREATE TABLE IF NOT EXISTS podcast_tags (
+    podcast_id TEXT NOT NULL,
+    tag_id     TEXT NOT NULL,
+    PRIMARY KEY (podcast_id, tag_id),
+    FOREIGN KEY (podcast_id) REFERENCES subscriptions(podcast_id),
+    FOREIGN KEY (tag_id)     REFERENCES tags(id)
+);
+CREATE INDEX IF NOT EXISTS idx_podcast_tags_tag ON podcast_tags(tag_id);
 """
 
 async def get_db() -> aiosqlite.Connection:

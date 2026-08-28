@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getFeed, FeedEpisode } from "../api/client";
+import { getFeed, getTags, FeedEpisode, Tag } from "../api/client";
 import { getCached, setCached } from "../cache";
+import FeedFilterBar, { FeedFilterState, EMPTY_FILTERS, hasActiveFilters } from "../components/FeedFilterBar";
 
 const FEED_CACHE_KEY = "home:feed";
 const SHOTS_CACHE_KEY = "home:shotCounts";
@@ -134,20 +135,35 @@ export default function Home() {
   const [loading, setLoading] = useState(() => !getCached(FEED_CACHE_KEY)); // skip spinner if cache hit
   const [refreshing, setRefreshing] = useState(false);
   const [noSubs, setNoSubs] = useState(false);
+  const [filters, setFilters] = useState<FeedFilterState>(EMPTY_FILTERS);
+  const [tags, setTags] = useState<Tag[]>([]);
 
-  const fetchFeed = async (showRefreshing = false) => {
+  const filtering = hasActiveFilters(filters);
+
+  const fetchFeed = async (showRefreshing = false, f: FeedFilterState = filters) => {
     if (showRefreshing) setRefreshing(true);
     try {
-      const episodes = await getFeed();
-      if (episodes.length === 0) { setNoSubs(true); return; }
+      const episodes = await getFeed({
+        q: f.q.trim(),
+        tag_id: f.tagId,
+        status: f.status,
+        // A filtered view should search the whole library, not just the most
+        // recent page, or a match from last year would silently not exist.
+        limit: hasActiveFilters(f) ? 200 : 50,
+      });
 
       const counts: Record<string, number> = {};
       episodes.forEach(ep => { counts[ep.id] = ep.distill_count; });
-
       setFeed(episodes);
       setShotCounts(counts);
-      setCached(FEED_CACHE_KEY, episodes);
-      setCached(SHOTS_CACHE_KEY, counts);
+
+      // Only the unfiltered feed is worth caching, and an empty result there
+      // genuinely means "no subscriptions" — under a filter it means "no match".
+      if (!hasActiveFilters(f)) {
+        setNoSubs(episodes.length === 0);
+        setCached(FEED_CACHE_KEY, episodes);
+        setCached(SHOTS_CACHE_KEY, counts);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -155,6 +171,17 @@ export default function Home() {
   };
 
   useEffect(() => { fetchFeed(); }, []);
+
+  useEffect(() => { getTags().then(setTags).catch(() => {}); }, []);
+
+  const applyFilters = (f: FeedFilterState) => {
+    setFilters(f);
+    setLoading(true);
+    fetchFeed(false, f);
+  };
+
+  // Played state is local-only, so this last hop cannot be done server-side.
+  const visible = filters.unplayedOnly ? feed.filter(ep => !played.has(ep.id)) : feed;
 
   const handleTogglePlayed = (id: string) => {
     setPlayed(togglePlayed(id));
@@ -194,9 +221,30 @@ export default function Home() {
         </button>
       </div>
 
+      <FeedFilterBar
+        filters={filters}
+        onChange={applyFilters}
+        tags={tags}
+        resultCount={visible.length}
+        loading={loading}
+      />
+
       {loading && [...Array(5)].map((_, i) => <SkeletonCard key={i} />)}
 
-      {!loading && feed.map(ep => (
+      {!loading && visible.length === 0 && filtering && (
+        <div className="text-center py-12 space-y-3">
+          <div className="text-4xl">🔍</div>
+          <p className="text-gray-400 text-sm">No episodes match these filters.</p>
+          <button
+            onClick={() => applyFilters(EMPTY_FILTERS)}
+            className="text-indigo-400 hover:text-indigo-300 text-sm min-h-[44px] px-3"
+          >
+            Clear filters
+          </button>
+        </div>
+      )}
+
+      {!loading && visible.map(ep => (
         <EpisodeCard
           key={ep.id}
           ep={ep}

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
-import { getSubscriptions, getEpisodes, unsubscribe, Subscription, Episode } from "../api/client";
+import { getSubscriptions, getEpisodes, unsubscribe, Subscription, Episode, Tag } from "../api/client";
 import { getCached, setCached, bustCache } from "../cache";
+import TagEditor from "../components/TagEditor";
 
 const TrashIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
@@ -34,6 +35,7 @@ function fmtDuration(secs?: number | null) {
 
 // ─── Episode List View ────────────────────────────────────────────────────────
 function EpisodeList({ sub, onUnsubscribed }: { sub: Subscription; onUnsubscribed: () => void }) {
+  const [tags, setTags] = useState<Tag[]>(sub.tags ?? []);
   const nav = useNavigate();
   const cacheKey = `episodes:${sub.podcast_id}`;
   const [episodes, setEpisodes] = useState<Episode[]>(() => getCached<Episode[]>(cacheKey) || []);
@@ -110,6 +112,12 @@ function EpisodeList({ sub, onUnsubscribed }: { sub: Subscription; onUnsubscribe
           {unsubbing ? <span className="text-sm">…</span> : <TrashIcon />}
         </button>
       </div>
+
+      <TagEditor
+        podcastId={sub.podcast_id}
+        value={tags}
+        onChange={setTags}
+      />
 
       {/* Loading skeletons */}
       {loading && (

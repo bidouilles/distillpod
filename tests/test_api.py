@@ -282,3 +282,13 @@ class TestChat:
             assert len(r_get2.json()) == 3
             roles = [m["role"] for m in r_get2.json()]
             assert roles == ["assistant", "user", "assistant"]
+
+
+class TestProtectedRoutes:
+    """Every API surface that reads user data or spends the owner's model
+    subscription must sit behind the session cookie."""
+
+    def test_all_api_prefixes_are_protected(self):
+        from middleware.auth import PROTECTED_PREFIXES
+        for prefix in ("/gists", "/podcasts", "/player", "/chat", "/research", "/tags"):
+            assert prefix in PROTECTED_PREFIXES, f"{prefix} is reachable without a session"

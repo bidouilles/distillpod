@@ -125,6 +125,7 @@ subscription either way.
 ## Features
 
 - **📰 Home feed** — unified list of the latest episodes across all subscriptions, sorted by date. Shows distillation count per episode.
+- **🏷️ Tags & filters** — tag your podcasts (`#tech`, `#français`, …) and filter the feed by tag, by title search, or by state: unplayed, transcribed, distilled, ad-free, downloaded. Filters combine, and searching looks across your whole library rather than just the page on screen.
 - **🔍 Search** — find podcasts via the iTunes Search API (no key needed). When the search box is empty, a **🤖 Suggested for you** section surfaces daily AI-generated recommendations based on your listening history.
 - **📚 Library** — browse your subscribed podcasts and their episode lists with transcript status badges.
 - **▶️ Fullscreen Player** — Spotify-style slide-up player with chapter navigation, ad-free toggle, and distillation controls.

@@ -87,7 +87,8 @@ backend/
   models.py            # Pydantic models
   middleware/auth.py   # JWT session auth middleware
   routers/
-    podcasts.py        # Search, subscribe, feed, suggestions
+    podcasts.py        # Search, subscribe, feed (+ filters), suggestions
+    tags.py            # Tags on subscriptions: CRUD + assignment
     player.py          # Download, stream audio, transcription status, chapters
     gists.py           # Create/list/delete AI gists (distillations)
     chat.py            # Per-episode AI chat
@@ -115,7 +116,15 @@ scripts/
 ## Key Notes
 
 - The backend serves the built frontend as a SPA catch-all -- no separate web server needed.
-- Protected API routes: `/gists`, `/podcasts`, `/player`. Auth routes and frontend assets are public.
+- Protected API routes: `/gists`, `/podcasts`, `/player`, `/chat`, `/research`,
+  `/tags`. Auth routes and frontend assets are public. `/chat` and `/research`
+  were missing from that list and were reachable unauthenticated — anything new
+  that reads user data or spends the model subscription must be added there.
+- Feed filtering is server-side (`GET /podcasts/feed?q=&tag_id=&status=`). It has
+  to be: the feed is capped, so filtering the already-truncated page in the client
+  would hide matches older than the cap.
+- Played state is localStorage only, so the "unplayed" filter is the one that
+  must stay client-side.
 - `TEST_MODE=true` bypasses auth entirely -- never set in production.
 - The model is invoked as a CLI subprocess, never via an HTTP API. Every call goes
   through `services/llm.py` — add features there, not with a new `subprocess.run`.
