@@ -17,3 +17,6 @@ test-results/
 sync.log
 .venv/
 venv/
+
+# Local deploy script — carries a specific host and tailnet name
+deploy.sh
