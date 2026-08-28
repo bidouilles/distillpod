@@ -11,7 +11,7 @@ from config import settings
 # /chat and /research were missing here: both were reachable without a session
 # on a public deployment, letting anyone read episode conversations, post
 # messages that spend the owner's model subscription, and queue research jobs.
-PROTECTED_PREFIXES = ["/gists", "/podcasts", "/player", "/chat", "/research", "/tags"]
+PROTECTED_PREFIXES = ["/gists", "/podcasts", "/player", "/chat", "/research", "/tags", "/search"]
 
 
 def create_session_token(user: dict) -> str:

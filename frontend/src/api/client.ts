@@ -48,6 +48,23 @@ export const getFeed = (filters: FeedFilters = {}) => {
   return req<FeedEpisode[]>("GET", `/podcasts/feed${suffix}`);
 };
 
+// --- Transcript search ---
+export interface TranscriptMatch { start: number; text: string; }
+export interface TranscriptHit {
+  episode_id: string;
+  episode_title: string;
+  podcast_id: string;
+  podcast_title: string;
+  podcast_image?: string;
+  published_at?: string;
+  duration_seconds?: number;
+  match_count: number;
+  matches: TranscriptMatch[];
+}
+
+export const searchTranscripts = (q: string) =>
+  req<TranscriptHit[]>("GET", `/search/transcripts?q=${encodeURIComponent(q)}`);
+
 // --- Tags ---
 export const getTags = () => req<Tag[]>("GET", "/tags");
 

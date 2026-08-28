@@ -290,5 +290,5 @@ class TestProtectedRoutes:
 
     def test_all_api_prefixes_are_protected(self):
         from middleware.auth import PROTECTED_PREFIXES
-        for prefix in ("/gists", "/podcasts", "/player", "/chat", "/research", "/tags"):
+        for prefix in ("/gists", "/podcasts", "/player", "/chat", "/research", "/tags", "/search"):
             assert prefix in PROTECTED_PREFIXES, f"{prefix} is reachable without a session"

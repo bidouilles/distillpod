@@ -89,6 +89,7 @@ backend/
   routers/
     podcasts.py        # Search, subscribe, feed (+ filters), suggestions
     tags.py            # Tags on subscriptions: CRUD + assignment
+    search.py          # Full-text search across transcripts
     player.py          # Download, stream audio, transcription status, chapters
     gists.py           # Create/list/delete AI gists (distillations)
     chat.py            # Per-episode AI chat
@@ -96,6 +97,7 @@ backend/
     auth.py            # Google OAuth2 login/logout
   services/
     llm.py             # Agent CLI adapter — the ONLY place a model is invoked
+    transcript_search.py # FTS hits -> timestamped snippets
     stt.py             # Speech-to-text adapter — Voxtral, mlx-whisper, or faster-whisper
     podcast_index.py   # Podcast Index API client
     rss.py             # RSS feed parser
@@ -120,6 +122,11 @@ scripts/
   `/tags`. Auth routes and frontend assets are public. `/chat` and `/research`
   were missing from that list and were reachable unauthenticated — anything new
   that reads user data or spends the model subscription must be added there.
+- Transcript search is two-stage: FTS5 (`transcripts_fts`) picks the episodes,
+  then a Python walk over `words_json` finds the timestamp. FTS5 can produce a
+  snippet but not a position in the audio, and the timestamp is the whole point.
+  `index_transcript` must be called on every transcript write or the episode
+  becomes unsearchable.
 - Feed filtering is server-side (`GET /podcasts/feed?q=&tag_id=&status=`). It has
   to be: the feed is capped, so filtering the already-truncated page in the client
   would hide matches older than the cap.

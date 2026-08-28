@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 import aiosqlite
 from config import settings
-from database import get_db
+from database import get_db, index_transcript
 from services import stt
 
 
@@ -43,6 +43,7 @@ async def transcribe_episode(episode_id: str, audio_path: Path) -> None:
             (episode_id, words_json, settings.stt_language or "auto",
              datetime.now(timezone.utc).isoformat())
         )
+        await index_transcript(db, episode_id, words_json)
         await db.execute(
             "UPDATE episodes SET transcript_status = 'done' WHERE id = ?",
             (episode_id,)
