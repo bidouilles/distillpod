@@ -286,8 +286,11 @@ the ad-detection hand-off. Two backends, selected by `settings.stt`:
   ffmpeg, then POSTed to `/v1/audio/transcriptions` with
   `timestamp_granularities=word`. Without that flag the API returns coarse
   phrase spans, which the distill window and ad segmenter cannot use. A
-  27-minute episode takes ~35s. Timings are quantised to 0.1s, which can round a
-  short word's `end` below its `start`; `_normalise` clamps that.
+  27-minute episode takes ~35s. The API caps a request at 3 hours, so longer
+  audio is split into `VOXTRAL_CHUNK_SECONDS` pieces and each chunk's timings
+  are shifted by the cumulative duration of the chunks before it. Timings are
+  quantised to 0.1s, which can round a short word's `end` below its `start`;
+  `_normalise` clamps that.
 - **whisper** — faster-whisper (CTranslate2, `int8`) on CPU. Lazy-imported and
   cached in a `_model` singleton, so a Voxtral-only deployment need not install
   the model at all. Measured at ~3.9x realtime with `small` on an Apple M-series

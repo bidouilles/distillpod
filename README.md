@@ -69,6 +69,12 @@ reads the transcript, so a weak one silently degrades every feature.
 | `voxtral` | Mistral hosted API | Negligible: an ffmpeg downmix and one HTTP request |
 | `whisper` | faster-whisper, locally | ~1.5GB RAM for `medium`, pins a core for minutes |
 
+**Very long episodes:** Voxtral accepts up to 3 hours per request, so anything
+longer is split into 1-hour pieces and stitched back onto one timeline
+automatically — a 5-hour Lex Fridman episode transcribes fine. Splitting costs
+roughly 1.5% of words at the cut boundaries, so episodes under an hour are sent
+whole and pay nothing.
+
 **On a 27-minute episode:** Voxtral takes **~35s**. faster-whisper `small` takes
 **~7 min** on a warm Apple M-series core (~3.9× realtime) — and a shared vCPU
 with `medium` or `large-v3` will be considerably slower again.

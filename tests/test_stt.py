@@ -190,3 +190,65 @@ class TestWhisper:
         monkeypatch.setattr(stt, "_get_model", lambda: model)
         with pytest.raises(stt.STTError, match="no words"):
             stt.transcribe("/tmp/ep.mp3")
+
+
+class TestLongEpisodeChunking:
+    """Voxtral accepts at most 3 hours per request. Lex Fridman routinely runs
+    past five, so long episodes are split and stitched."""
+
+    def test_short_episode_takes_single_request(self, voxtral, monkeypatch):
+        monkeypatch.setattr(stt, "_audio_duration", lambda p: 1645.0)
+        with patch("httpx.post", return_value=_voxtral_response(WORDS)) as p:
+            stt.transcribe("/tmp/ep.mp3")
+        assert p.call_count == 1
+
+    def test_long_episode_is_split(self, voxtral, monkeypatch, tmp_path):
+        """A 5h21m episode (Lex #501) must not be sent as one request."""
+        parts = []
+        for i in range(6):
+            f = tmp_path / f"part{i}.mp3"
+            f.write_bytes(b"x")
+            parts.append(f)
+        monkeypatch.setattr(stt, "_audio_duration",
+                            lambda p: 19317.0 if str(p).endswith("ep.mp3") else 3600.0)
+        monkeypatch.setattr(stt, "_split_audio", lambda a, d: parts)
+        with patch("httpx.post", return_value=_voxtral_response(WORDS)) as p:
+            out = stt.transcribe("/tmp/ep.mp3")
+        assert p.call_count == 6
+        assert len(out) == 6 * len(WORDS)
+
+    def test_chunk_timestamps_are_shifted_onto_the_episode_timeline(self, voxtral, monkeypatch, tmp_path):
+        """Each chunk's timings come back relative to that chunk. Without an
+        offset every hour would restart at 0 and every seek would be wrong."""
+        parts = []
+        for i in range(3):
+            f = tmp_path / f"p{i}.mp3"
+            f.write_bytes(b"x")
+            parts.append(f)
+        monkeypatch.setattr(stt, "_audio_duration",
+                            lambda p: 10000.0 if str(p).endswith("ep.mp3") else 3600.0)
+        monkeypatch.setattr(stt, "_split_audio", lambda a, d: parts)
+        with patch("httpx.post", return_value=_voxtral_response(WORDS)):
+            out = stt.transcribe("/tmp/ep.mp3")
+        starts = [w["start"] for w in out]
+        assert starts[0] == pytest.approx(0.2)          # chunk 0, unshifted
+        assert starts[3] == pytest.approx(3600.2)       # chunk 1, +1h
+        assert starts[6] == pytest.approx(7200.2)       # chunk 2, +2h
+        assert starts == sorted(starts), "stitched timeline must be monotonic"
+
+    def test_split_command_enforces_the_chunk_length(self, tmp_path):
+        with patch("subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess([], 0)
+            stt._split_audio("/tmp/in.mp3", tmp_path)
+        argv = run.call_args[0][0]
+        assert argv[argv.index("-f") + 1] == "segment"
+        assert argv[argv.index("-segment_time") + 1] == str(stt.VOXTRAL_CHUNK_SECONDS)
+        assert int(argv[argv.index("-segment_time") + 1]) <= 3 * 3600
+
+    def test_unreadable_long_audio_raises(self, voxtral, monkeypatch):
+        monkeypatch.setattr(stt, "_audio_duration", lambda p: 19317.0)
+        def boom(a, d):
+            raise subprocess.CalledProcessError(1, "ffmpeg", stderr=b"bad data")
+        monkeypatch.setattr(stt, "_split_audio", boom)
+        with pytest.raises(stt.STTError, match="ffmpeg could not read"):
+            stt.transcribe("/tmp/ep.mp3")
