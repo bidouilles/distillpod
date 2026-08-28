@@ -4,10 +4,11 @@ Speech-to-text adapter — the single place audio becomes a word list.
 Two backends, both returning the same shape the rest of the app depends on:
 a list of {word, start, end} where `word` carries its own leading space.
 
-  voxtral  Mistral's hosted API. Fast (a 27-minute episode in ~50s) and strong
+  voxtral  Mistral's hosted API. Fast (a 27-minute episode in ~35s) and strong
            on non-English audio, but the audio leaves the VPS.
-  whisper  faster-whisper, local and private, but CPU-bound: the same episode
-           takes 10-20 minutes and pins a core.
+  whisper  faster-whisper, local and private, but CPU-bound: roughly 4x realtime
+           with `small` on a warm Apple M-series core, so ~7 minutes for that
+           same episode, and longer on a typical VPS.
 
 `STT_BACKEND=auto` (the default) picks voxtral when MISTRAL_API_KEY is set and
 falls back to whisper otherwise.

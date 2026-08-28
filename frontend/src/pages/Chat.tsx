@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useParams, useLocation, useNavigate } from "react-router-dom";
-import { getChat, initChat, sendChatMessage, ChatMessage } from "../api/client";
+import { getChat, initChat, sendChatMessage, getEpisode, ChatMessage } from "../api/client";
 import { useAudio } from "../context/AudioContext";
+import { copyText, downloadText, slugify } from "../lib/clipboard";
 import ReactMarkdown from "react-markdown";
 
 const markdownComponents = {
@@ -19,11 +20,33 @@ const markdownComponents = {
   },
 };
 
+/** Render the conversation as Markdown. Assistant replies are already Markdown,
+ *  so they drop in verbatim; user turns are plain text. */
+function buildMarkdown(episodeTitle: string, messages: ChatMessage[]): string {
+  const out = [
+    `# ${episodeTitle}`,
+    "",
+    `_Chat exported from DistillPod — ${new Date().toLocaleString()}_`,
+    "",
+    "---",
+    "",
+  ];
+  for (const m of messages) {
+    out.push(m.role === "user" ? "### You" : "### DistillPod", "", m.content.trim(), "");
+  }
+  return out.join("\n");
+}
+
+
 export default function Chat() {
   const { episodeId } = useParams<{ episodeId: string }>();
   const location = useLocation();
   const navigate = useNavigate();
-  const episodeTitle = (location.state as { episodeTitle?: string } | null)?.episodeTitle ?? "Episode";
+  const passedTitle = (location.state as { episodeTitle?: string } | null)?.episodeTitle;
+  // location.state is empty on a direct load or refresh, so fall back to the API
+  // rather than showing (and exporting) a generic "Episode".
+  const [fetchedTitle, setFetchedTitle] = useState<string | null>(null);
+  const episodeTitle = passedTitle ?? fetchedTitle ?? "Episode";
   const { episode: audioEpisode } = useAudio();
   const bottomOffset = audioEpisode ? "calc(56px + 56px + env(safe-area-inset-bottom))" : "calc(56px + env(safe-area-inset-bottom))";
 
@@ -31,6 +54,7 @@ export default function Chat() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [initializing, setInitializing] = useState(true);
+  const [exported, setExported] = useState<"copied" | "failed" | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -40,6 +64,15 @@ export default function Chat() {
   useEffect(() => {
     scrollToBottom();
   }, [messages, loading]);
+
+  useEffect(() => {
+    if (!episodeId || passedTitle) return;
+    let cancelled = false;
+    getEpisode(episodeId)
+      .then(ep => { if (!cancelled) setFetchedTitle(ep.title); })
+      .catch(() => { /* header falls back to "Episode" */ });
+    return () => { cancelled = true; };
+  }, [episodeId, passedTitle]);
 
   useEffect(() => {
     if (!episodeId) return;
@@ -92,6 +125,16 @@ export default function Chat() {
     }
   };
 
+  const handleCopy = async () => {
+    const ok = await copyText(buildMarkdown(episodeTitle, messages));
+    setExported(ok ? "copied" : "failed");
+    setTimeout(() => setExported(null), 2000);
+  };
+
+  const handleDownload = () => {
+    downloadText(`${slugify(episodeTitle)}-chat.md`, buildMarkdown(episodeTitle, messages));
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -114,6 +157,25 @@ export default function Chat() {
         <div className="min-w-0 flex-1">
           <h1 className="text-sm font-bold truncate" style={{ color: "#FFD700" }}>Chat</h1>
           <p className="text-xs text-gray-400 truncate">{episodeTitle}</p>
+        </div>
+
+        <div className="flex flex-shrink-0 gap-1">
+          <button
+            onClick={handleCopy}
+            disabled={messages.length === 0}
+            title="Copy conversation as Markdown"
+            className="text-xs text-gray-400 hover:text-white px-2 py-1 rounded hover:bg-gray-700 transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+          >
+            {exported === "copied" ? "✓ Copied" : exported === "failed" ? "✕ Failed" : "📋 Copy"}
+          </button>
+          <button
+            onClick={handleDownload}
+            disabled={messages.length === 0}
+            title="Download conversation as a .md file"
+            className="text-xs text-gray-400 hover:text-white px-2 py-1 rounded hover:bg-gray-700 transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+          >
+            ⬇ .md
+          </button>
         </div>
       </div>
 

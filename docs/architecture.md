@@ -290,7 +290,9 @@ the ad-detection hand-off. Two backends, selected by `settings.stt`:
   short word's `end` below its `start`; `_normalise` clamps that.
 - **whisper** — faster-whisper (CTranslate2, `int8`) on CPU. Lazy-imported and
   cached in a `_model` singleton, so a Voxtral-only deployment need not install
-  the model at all. Same episode: 10–20 minutes.
+  the model at all. Measured at ~3.9x realtime with `small` on an Apple M-series
+  CPU once warm, so the same episode takes ~7 minutes — longer on a typical VPS,
+  and longer again with `medium` or `large-v3`.
 
 **Async flow:**
 ```
@@ -598,7 +600,7 @@ POST /player/play  (user taps Play)
   │
   └─→ background task: transcribe_episode()
         │
-        ├─→ stt.transcribe() [voxtral ~35s, or whisper on CPU ~10–20 min]
+        ├─→ stt.transcribe() [voxtral ~35s, or whisper on CPU ~7 min+]
         │
         ├─→ INSERT transcripts (words_json)
         │

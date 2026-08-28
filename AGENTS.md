@@ -105,6 +105,7 @@ backend/
     researcher.py      # Deep research report generation
 frontend/
   src/                 # React SPA (pages, components, stores, api)
+    lib/clipboard.ts   # copy/download helpers (execCommand fallback for non-HTTPS)
 scripts/
   daily-sync.py        # Cron job: sync feeds
   suggest-podcasts.py  # Cron job: AI podcast suggestions

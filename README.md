@@ -41,7 +41,7 @@ If you have a VPS and a Codex (or Claude) subscription, you already have everyth
 - **⚗️ Distill** — tap at any moment while listening. Captures the last 60 seconds of transcript, calls the agent CLI, and returns a verbatim quote and a 1–2 sentence insight (~30s).
 - **✂️ Ad-free audio** — after transcription, the model classifies ad segments and ffmpeg cuts them out. Stream the clean version from the player.
 - **📖 Chapters** — the model generates 4–10 named chapters with timestamps from the full transcript. Tap any chapter to jump directly.
-- **💬 Episode chat** — ask questions about any transcribed episode. The model answers using the full transcript as context. History kept per episode (capped at 50 messages).
+- **💬 Episode chat** — ask questions about any transcribed episode. The model answers using the full transcript as context. History kept per episode (capped at 50 messages). Copy the whole conversation as Markdown or download it as a `.md` file from the chat header.
 - **🔬 Research** — trigger a deep research report from any distillation. The model generates queries, Tavily runs web searches, then synthesizes findings into an HTML report. Delivered via Telegram.
 - **📋 Distillations library** — all your distillations grouped by episode. Copy, delete, or trigger research from any entry.
 - **⚡ Stale-while-revalidate caching** — data is cached in localStorage with a 30-minute TTL and refreshed silently in the background.
@@ -129,7 +129,7 @@ to pin one explicitly — an explicit `whisper` wins even if a key is present.
 
 | | Voxtral (`voxtral-mini-latest`) | faster-whisper |
 |---|---|---|
-| Speed | ~35s for a 27-minute episode | 10–20 min on CPU for the same |
+| Speed | ~35s for a 27-minute episode | ~7 min for the same (`small`, warm, Apple M-series CPU); slower on a typical VPS and with `medium`/`large-v3` |
 | Privacy | Audio is uploaded to Mistral | Never leaves your server |
 | Cost | Per-minute API billing | Free, but pins a CPU core |
 | Non-English | Strong | Needs `large-v3` to compete |
