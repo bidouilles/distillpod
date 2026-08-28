@@ -67,9 +67,10 @@ Env file: `/etc/distillpod.env` (mode 600, owned by root, loaded via `Environmen
 | `GOOGLE_CLIENT_SECRET` | Google OAuth2 client secret |
 | `ALLOWED_EMAILS` | Comma-separated email allowlist |
 | `SESSION_SECRET` | JWT signing secret (`openssl rand -hex 32`) |
-| `STT_BACKEND` | Transcription: `auto` (default), `voxtral`, or `whisper` |
+| `STT_BACKEND` | Transcription: `auto` (default), `voxtral`, `mlx`, or `whisper` |
 | `MISTRAL_API_KEY` | Mistral key; its presence makes `auto` pick Voxtral |
 | `STT_MODEL` | Voxtral model (default: `voxtral-mini-latest`) |
+| `MLX_MODEL_REPO` | Pin an MLX repo; else derived from `WHISPER_MODEL` |
 | `STT_LANGUAGE` | ISO code e.g. `fr`; empty = auto-detect |
 | `WHISPER_MODEL` | Whisper model size (default: `medium`) |
 | `WHISPER_DEVICE` | Whisper device (default: `cpu`) |
@@ -94,7 +95,7 @@ backend/
     auth.py            # Google OAuth2 login/logout
   services/
     llm.py             # Agent CLI adapter — the ONLY place a model is invoked
-    stt.py             # Speech-to-text adapter — Voxtral or faster-whisper
+    stt.py             # Speech-to-text adapter — Voxtral, mlx-whisper, or faster-whisper
     podcast_index.py   # Podcast Index API client
     rss.py             # RSS feed parser
     downloader.py      # Episode audio downloader
@@ -128,6 +129,11 @@ scripts/
   `[{word, start, end}]` with the leading space kept on each word. Distill
   windows, the ad segmenter and chapter seeks all index into that array, so a
   backend that only returns phrase-level spans cannot be plugged in as-is.
+- faster-whisper cannot use a Mac GPU: CTranslate2 has no Metal backend and
+  rejects `mps`/`metal`. `STT_BACKEND=mlx` runs the same model on the GPU at
+  roughly 8x the speed. mlx returns numpy floats, which `json.dumps` cannot
+  serialise — `_transcribe_mlx` casts them, and the transcript goes straight
+  into the DB, so do not remove that.
 - Voxtral quantises timings to 0.1s and occasionally emits `end < start`;
   `stt._normalise` clamps that. Audio is downmixed to 16 kHz mono before upload,
   which keeps long episodes under the size limit and costs no accuracy.

@@ -53,10 +53,14 @@ class TestBackendSelection:
         monkeypatch.setattr(settings, "mistral_api_key", "sk-test")
         assert settings.stt == "voxtral"
 
-    def test_auto_falls_back_to_whisper_without_key(self, monkeypatch):
+    def test_auto_stays_local_without_key(self, monkeypatch):
+        """Without a key, auto must never reach a hosted backend. Which local
+        engine it lands on depends on whether the GPU extra is installed —
+        see TestAutoPrefersGpuOverCpu."""
         monkeypatch.setattr(settings, "stt_backend", "auto")
         monkeypatch.setattr(settings, "mistral_api_key", "")
-        assert settings.stt == "whisper"
+        assert settings.stt in ("mlx", "whisper")
+        assert settings.stt != "voxtral"
 
     def test_explicit_whisper_wins_over_key(self, monkeypatch):
         """A key present must not silently override an explicit local-only choice."""
@@ -252,3 +256,131 @@ class TestLongEpisodeChunking:
         monkeypatch.setattr(stt, "_split_audio", boom)
         with pytest.raises(stt.STTError, match="ffmpeg could not read"):
             stt.transcribe("/tmp/ep.mp3")
+
+
+class TestWhisperLanguage:
+    """STT_LANGUAGE must apply to both backends, not just Voxtral."""
+
+    def _run(self, monkeypatch, language):
+        monkeypatch.setattr(settings, "stt_backend", "whisper")
+        monkeypatch.setattr(settings, "stt_language", language)
+        word = MagicMock(word=" bonjour", start=1.0, end=1.4)
+        model = MagicMock()
+        model.transcribe.return_value = ([MagicMock(words=[word])], None)
+        monkeypatch.setattr(stt, "_get_model", lambda: model)
+        stt.transcribe("/tmp/ep.mp3")
+        return model.transcribe.call_args.kwargs
+
+    def test_language_pinned_when_set(self, monkeypatch):
+        assert self._run(monkeypatch, "fr")["language"] == "fr"
+
+    def test_language_omitted_when_unset(self, monkeypatch):
+        assert "language" not in self._run(monkeypatch, "")
+
+
+# ── mlx-whisper (Apple Silicon GPU) ──────────────────────────────────────────
+
+def _mlx_result(words):
+    return {"segments": [{"words": words}]}
+
+
+@pytest.fixture
+def mlx(monkeypatch):
+    monkeypatch.setattr(settings, "stt_backend", "mlx")
+    monkeypatch.setattr(settings, "stt_language", "")
+    monkeypatch.setattr(settings, "whisper_model", "medium")
+    monkeypatch.setattr(settings, "mlx_model_repo", "")
+
+
+class TestMlx:
+
+    def _patch_mlx(self, monkeypatch, result):
+        mod = MagicMock()
+        mod.transcribe.return_value = result
+        monkeypatch.setitem(__import__("sys").modules, "mlx_whisper", mod)
+        return mod
+
+    def test_maps_words(self, mlx, monkeypatch):
+        mod = self._patch_mlx(monkeypatch, _mlx_result([
+            {"word": " jeu", "start": 0.0, "end": 0.4, "probability": 0.19},
+            {"word": " dans", "start": 0.4, "end": 0.58, "probability": 0.81},
+        ]))
+        assert stt.transcribe("/tmp/ep.mp3") == [
+            {"word": " jeu", "start": 0.0, "end": 0.4},
+            {"word": " dans", "start": 0.4, "end": 0.58},
+        ]
+
+    def test_casts_numpy_floats(self, mlx, monkeypatch):
+        """mlx returns np.float64. transcriber.py json.dumps() the result
+        straight into the DB, and numpy floats are not JSON-serialisable."""
+        np = pytest.importorskip("numpy")
+        self._patch_mlx(monkeypatch, _mlx_result(
+            [{"word": " jeu", "start": np.float64(0.0), "end": np.float64(0.4)}]))
+        out = stt.transcribe("/tmp/ep.mp3")
+        assert type(out[0]["start"]) is float
+        json.dumps(out)   # would raise on np.float64
+
+    def test_derives_repo_from_whisper_model(self, mlx, monkeypatch):
+        mod = self._patch_mlx(monkeypatch, _mlx_result([{"word": " a", "start": 0.0, "end": 0.1}]))
+        stt.transcribe("/tmp/ep.mp3")
+        assert mod.transcribe.call_args.kwargs["path_or_hf_repo"] == "mlx-community/whisper-medium-mlx"
+
+    def test_pinned_repo_wins(self, mlx, monkeypatch):
+        monkeypatch.setattr(settings, "mlx_model_repo", "mlx-community/whisper-large-v3-mlx")
+        mod = self._patch_mlx(monkeypatch, _mlx_result([{"word": " a", "start": 0.0, "end": 0.1}]))
+        stt.transcribe("/tmp/ep.mp3")
+        assert mod.transcribe.call_args.kwargs["path_or_hf_repo"] == "mlx-community/whisper-large-v3-mlx"
+
+    def test_language_pinned(self, mlx, monkeypatch):
+        monkeypatch.setattr(settings, "stt_language", "fr")
+        mod = self._patch_mlx(monkeypatch, _mlx_result([{"word": " a", "start": 0.0, "end": 0.1}]))
+        stt.transcribe("/tmp/ep.mp3")
+        assert mod.transcribe.call_args.kwargs["language"] == "fr"
+
+    def test_word_timestamps_always_requested(self, mlx, monkeypatch):
+        mod = self._patch_mlx(monkeypatch, _mlx_result([{"word": " a", "start": 0.0, "end": 0.1}]))
+        stt.transcribe("/tmp/ep.mp3")
+        assert mod.transcribe.call_args.kwargs["word_timestamps"] is True
+
+    def test_empty_result_raises(self, mlx, monkeypatch):
+        self._patch_mlx(monkeypatch, {"segments": []})
+        with pytest.raises(stt.STTError, match="no words"):
+            stt.transcribe("/tmp/ep.mp3")
+
+    def test_engine_failure_raises(self, mlx, monkeypatch):
+        mod = MagicMock()
+        mod.transcribe.side_effect = RuntimeError("metal oom")
+        monkeypatch.setitem(__import__("sys").modules, "mlx_whisper", mod)
+        with pytest.raises(stt.STTError, match="mlx-whisper failed"):
+            stt.transcribe("/tmp/ep.mp3")
+
+    def test_missing_package_raises_actionable_error(self, mlx, monkeypatch):
+        monkeypatch.setitem(__import__("sys").modules, "mlx_whisper", None)
+        with pytest.raises(stt.STTError, match="pip install mlx-whisper"):
+            stt.transcribe("/tmp/ep.mp3")
+
+
+class TestAutoPrefersGpuOverCpu:
+
+    def test_auto_picks_mlx_when_available(self, monkeypatch):
+        monkeypatch.setattr(settings, "stt_backend", "auto")
+        monkeypatch.setattr(settings, "mistral_api_key", "")
+        monkeypatch.setattr(stt, "mlx_available", lambda: True)
+        assert settings.stt == "mlx"
+
+    def test_auto_falls_back_to_whisper_without_mlx(self, monkeypatch):
+        monkeypatch.setattr(settings, "stt_backend", "auto")
+        monkeypatch.setattr(settings, "mistral_api_key", "")
+        monkeypatch.setattr(stt, "mlx_available", lambda: False)
+        assert settings.stt == "whisper"
+
+    def test_key_still_wins_over_mlx(self, monkeypatch):
+        monkeypatch.setattr(settings, "stt_backend", "auto")
+        monkeypatch.setattr(settings, "mistral_api_key", "sk-test")
+        monkeypatch.setattr(stt, "mlx_available", lambda: True)
+        assert settings.stt == "voxtral"
+
+    def test_explicit_whisper_beats_available_gpu(self, monkeypatch):
+        monkeypatch.setattr(settings, "stt_backend", "whisper")
+        monkeypatch.setattr(stt, "mlx_available", lambda: True)
+        assert settings.stt == "whisper"

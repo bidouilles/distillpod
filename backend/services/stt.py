@@ -5,15 +5,23 @@ Two backends, both returning the same shape the rest of the app depends on:
 a list of {word, start, end} where `word` carries its own leading space.
 
   voxtral  Mistral's hosted API. Fast (a 27-minute episode in ~35s) and strong
-           on non-English audio, but the audio leaves the VPS.
-  whisper  faster-whisper, local and private, but CPU-bound: roughly 4x realtime
-           with `small` on a warm Apple M-series core, so ~7 minutes for that
-           same episode, and longer on a typical VPS.
+           on non-English audio, but the audio leaves the machine.
+  mlx      mlx-whisper on Apple Silicon's GPU. Local like whisper, but ~8x
+           faster: measured 14.5x realtime with `medium`, against
+           faster-whisper's 1.79x on the same machine and clip. macOS arm64.
+  whisper  faster-whisper, local and private, but CPU-bound everywhere. It is
+           built on CTranslate2, which has no Metal backend at all — `mps` and
+           `metal` are rejected outright — so on a Mac it cannot touch the GPU
+           whatever WHISPER_DEVICE says. Use `mlx` there instead.
 
-`STT_BACKEND=auto` (the default) picks voxtral when MISTRAL_API_KEY is set and
-falls back to whisper otherwise.
+`STT_BACKEND=auto` (the default) prefers voxtral when MISTRAL_API_KEY is set,
+then mlx where it is importable, then whisper. That fallback only ever trades
+one local engine for a faster local one, so it can never silently move audio
+off the machine — reaching voxtral requires a key.
 """
+import importlib.util
 import json
+import logging
 import subprocess
 import tempfile
 from pathlib import Path
@@ -22,6 +30,8 @@ from typing import Optional
 import httpx
 
 from config import settings
+
+log = logging.getLogger(__name__)
 
 MISTRAL_URL = "https://api.mistral.ai/v1/audio/transcriptions"
 
@@ -44,10 +54,19 @@ class STTError(RuntimeError):
     """Transcription failed. The caller marks the episode 'error'."""
 
 
+def mlx_available() -> bool:
+    """True when mlx-whisper can be imported — Apple Silicon with the extra installed."""
+    return importlib.util.find_spec("mlx_whisper") is not None
+
+
 def transcribe(audio_path: str) -> list[dict]:
     """Blocking. Returns [{word, start, end}, ...]; raises STTError on failure."""
-    if settings.stt == "voxtral":
+    backend = settings.stt
+    log.info("transcribing with %s", backend)
+    if backend == "voxtral":
         return _transcribe_voxtral(audio_path)
+    if backend == "mlx":
+        return _transcribe_mlx(audio_path)
     return _transcribe_whisper(audio_path)
 
 
@@ -186,6 +205,43 @@ def _normalise(words: list[dict]) -> list[dict]:
     return words
 
 
+# ── mlx-whisper (Apple Silicon GPU) ──────────────────────────────────────────
+
+def _mlx_repo() -> str:
+    """Map WHISPER_MODEL onto an MLX community repo, unless one is pinned."""
+    return settings.mlx_model_repo or f"mlx-community/whisper-{settings.whisper_model}-mlx"
+
+
+def _transcribe_mlx(audio_path: str) -> list[dict]:
+    try:
+        import mlx_whisper
+    except ImportError as exc:
+        raise STTError(
+            "STT_BACKEND=mlx but mlx-whisper is not installed "
+            "(pip install mlx-whisper; Apple Silicon only)"
+        ) from exc
+
+    kwargs = {"word_timestamps": True, "path_or_hf_repo": _mlx_repo()}
+    if settings.stt_language:
+        kwargs["language"] = settings.stt_language
+    try:
+        result = mlx_whisper.transcribe(audio_path, **kwargs)
+    except Exception as exc:
+        raise STTError(f"mlx-whisper failed: {exc}") from exc
+
+    # mlx hands back numpy floats, which json.dumps cannot serialise — and the
+    # caller writes this straight into the transcripts table. Cast here.
+    words = [
+        {"word": w["word"], "start": float(w["start"]), "end": float(w["end"])}
+        for seg in result.get("segments", [])
+        for w in seg.get("words", [])
+        if w.get("word")
+    ]
+    if not words:
+        raise STTError("mlx-whisper produced no words")
+    return _normalise(words)
+
+
 # ── faster-whisper ────────────────────────────────────────────────────────────
 
 _model = None
@@ -205,9 +261,16 @@ def _get_model():
 
 
 def _transcribe_whisper(audio_path: str) -> list[dict]:
+    # STT_LANGUAGE applies to both backends. Pinning it skips faster-whisper's
+    # detection pass, which is a real risk on a bilingual feed: it samples only
+    # the opening seconds, so an English sponsor read over a French episode can
+    # flip the whole transcript to the wrong language.
+    kwargs = {"word_timestamps": True}
+    if settings.stt_language:
+        kwargs["language"] = settings.stt_language
     try:
         model = _get_model()
-        segments, _ = model.transcribe(audio_path, word_timestamps=True)
+        segments, _ = model.transcribe(audio_path, **kwargs)
     except ImportError as exc:
         raise STTError("faster-whisper is not installed; set MISTRAL_API_KEY to use voxtral") from exc
     words = []

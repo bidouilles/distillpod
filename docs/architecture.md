@@ -61,7 +61,7 @@ DistillPod is a self-hosted podcast client with AI-powered features: on-device t
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google OAuth |
 | `ALLOWED_EMAILS` | Comma-separated allowlist (`<your-email@gmail.com>`) |
 | `SESSION_SECRET` | HMAC key for session cookies |
-| `STT_BACKEND` | `auto` — voxtral when `MISTRAL_API_KEY` is set, else whisper |
+| `STT_BACKEND` | `auto` — voxtral when `MISTRAL_API_KEY` is set, else mlx if importable, else whisper |
 | `MISTRAL_API_KEY` | Mistral key for Voxtral |
 | `STT_MODEL` | `voxtral-mini-latest` |
 | `STT_LANGUAGE` | ISO code, empty = auto-detect |
@@ -291,6 +291,10 @@ the ad-detection hand-off. Two backends, selected by `settings.stt`:
   are shifted by the cumulative duration of the chunks before it. Timings are
   quantised to 0.1s, which can round a short word's `end` below its `start`;
   `_normalise` clamps that.
+- **mlx** — mlx-whisper on the Apple Silicon GPU. Same Whisper weights as the
+  whisper backend, ~8x faster (14.5x realtime with `medium`, against 1.79x for
+  faster-whisper on the same machine). Returns numpy floats that must be cast
+  before the transcript is JSON-encoded into the DB.
 - **whisper** — faster-whisper (CTranslate2, `int8`) on CPU. Lazy-imported and
   cached in a `_model` singleton, so a Voxtral-only deployment need not install
   the model at all. Measured at ~3.9x realtime with `small` on an Apple M-series

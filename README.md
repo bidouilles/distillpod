@@ -65,9 +65,23 @@ reads the transcript, so a weak one silently degrades every feature.
 
 | `STT_BACKEND` | Uses | Cost on your server |
 |---|---|---|
-| `auto` *(default)* | Voxtral if `MISTRAL_API_KEY` is set, else faster-whisper | — |
+| `auto` *(default)* | Voxtral if a key is set, else `mlx` if importable, else `whisper` | — |
 | `voxtral` | Mistral hosted API | Negligible: an ffmpeg downmix and one HTTP request |
-| `whisper` | faster-whisper, locally | ~1.5GB RAM for `medium`, pins a core for minutes |
+| `mlx` | mlx-whisper on the Apple Silicon GPU | Local, but ~8x faster than the CPU path |
+| `whisper` | faster-whisper, on CPU | ~1.5GB RAM for `medium`, pins a core for minutes |
+
+**On a Mac, `WHISPER_DEVICE` cannot use the GPU.** faster-whisper is built on
+CTranslate2, which has no Metal backend at all — it rejects `mps` and `metal`
+outright and was not compiled with CUDA. Use `STT_BACKEND=mlx` instead
+(`pip install mlx-whisper`), which runs the same Whisper model on the GPU.
+
+Measured on the same machine and clip with `medium`:
+
+| Backend | Speed | 27-min episode |
+|---|---|---|
+| `voxtral` | — | ~35s |
+| `mlx` (GPU) | 14.5x realtime | ~2 min |
+| `whisper` (CPU) | 1.79x realtime | ~15 min |
 
 **Very long episodes:** Voxtral accepts up to 3 hours per request, so anything
 longer is split into 1-hour pieces and stitched back onto one timeline

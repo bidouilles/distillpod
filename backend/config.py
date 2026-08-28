@@ -35,20 +35,28 @@ class Settings(BaseSettings):
     port: int = 8124
     frontend_origin: str = "http://localhost:5173"
 
-    # Transcription — "auto" picks voxtral when a Mistral key is present.
-    stt_backend: str = "auto"                # auto / voxtral / whisper
+    # Transcription. "auto" prefers a hosted key, then the GPU, then the CPU.
+    stt_backend: str = "auto"                # auto / voxtral / mlx / whisper
     stt_model: str = "voxtral-mini-latest"   # voxtral only
     stt_language: str = ""                   # ISO code, e.g. "fr"; empty = auto-detect
     mistral_api_key: str = ""
+    mlx_model_repo: str = ""                 # pin an MLX repo; else derived from whisper_model
 
     @property
     def stt(self) -> str:
-        if self.stt_backend in ("voxtral", "whisper"):
+        if self.stt_backend in ("voxtral", "mlx", "whisper"):
             return self.stt_backend
-        return "voxtral" if self.mistral_api_key else "whisper"
+        if self.mistral_api_key:
+            return "voxtral"
+        # Prefer the Apple Silicon GPU over the CPU when it is available. Both
+        # are local, so this only ever trades speed for speed.
+        from services.stt import mlx_available
+        return "mlx" if mlx_available() else "whisper"
 
-    # faster-whisper (used when stt resolves to "whisper")
+    # Whisper model size, shared by the mlx and whisper backends.
     whisper_model: str = "medium"           # base / small / medium / large-v3
+    # faster-whisper only. CTranslate2 has no Metal backend, so on macOS this
+    # can only ever be "cpu" — use STT_BACKEND=mlx for the GPU there.
     whisper_device: str = "cpu"
     gist_context_seconds: int = 60        # seconds of audio captured per shot
 

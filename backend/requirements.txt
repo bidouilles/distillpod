@@ -2,7 +2,10 @@ fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
 aiosqlite>=0.20.0
 feedparser>=6.0.11
-# Only needed when STT_BACKEND resolves to "whisper" (i.e. no MISTRAL_API_KEY).
+# Transcription engines are optional — pick one via STT_BACKEND.
+#   voxtral: nothing to install, just MISTRAL_API_KEY
+#   mlx:     pip install mlx-whisper   (macOS arm64, uses the GPU)
+#   whisper: faster-whisper below      (CPU everywhere)
 faster-whisper>=1.0.0
 httpx>=0.27.0
 requests>=2.31.0
