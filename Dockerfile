@@ -10,12 +10,18 @@ RUN npm run build
 FROM python:3.12-slim
 WORKDIR /app
 
-# System deps: ffmpeg for ad-free audio cutting, Node.js + Claude CLI
+# System deps: ffmpeg for ad-free audio cutting, Node.js + the agent CLI.
+# Build with --build-arg LLM_BACKEND=claude to bake in the Claude CLI instead.
+ARG LLM_BACKEND=codex
 RUN apt-get update && \
-    apt-get install -y curl ffmpeg && \
+    apt-get install -y curl ffmpeg git && \
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs && \
-    npm install -g @anthropic-ai/claude-code && \
+    if [ "$LLM_BACKEND" = "claude" ]; then \
+        npm install -g @anthropic-ai/claude-code; \
+    else \
+        npm install -g @openai/codex; \
+    fi && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Python deps
@@ -33,7 +39,7 @@ RUN mkdir -p /app/media /app/reports /app/data
 
 WORKDIR /app/backend
 
-ENV CLAUDE_BIN=claude
+ENV LLM_BACKEND=${LLM_BACKEND}
 
 EXPOSE 8124
 

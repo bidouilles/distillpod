@@ -2,7 +2,6 @@ import json
 import os
 import re
 import sqlite3
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,8 +9,17 @@ import markdown
 import requests
 
 from config import settings
+from services import llm
 
-CLAUDE_BIN = settings.claude
+TOPICS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "topics": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["topics"],
+    "additionalProperties": False,
+}
+
 TAVILY_KEY = os.environ.get("TAVILY_API_KEY", "")
 TG_TOKEN = settings.telegram_bot_token
 TG_CHAT = settings.telegram_chat_id
@@ -74,14 +82,9 @@ def run_research_sync(
         conn.commit()
         conn.close()
 
-    def claude(prompt: str) -> str:
-        result = subprocess.run(
-            [CLAUDE_BIN, "--print", prompt],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        return _clean_text(result.stdout)
+    def ask(prompt: str) -> str:
+        """Prose step. Failures degrade the report rather than abort it."""
+        return _clean_text(llm.run(prompt, timeout=120, default=""))
 
     def tavily_search(query: str) -> list:
         try:
@@ -104,21 +107,16 @@ def run_research_sync(
 
         # Step 1: Extract 3-5 key topics
         source_text = gist_summary or gist_text
-        topics_raw = claude(
-            f"Extract 3 to 5 key topics from this podcast distillation. "
-            f"Return ONLY a JSON array of short topic strings (e.g. [\"Topic One\", \"Topic Two\"]). "
-            f"No explanation, no markdown, just the JSON array.\n\n{source_text}"
+        topics_data = llm.run_json(
+            "Extract 3 to 5 key topics from this podcast distillation, as short "
+            f"topic strings under the \"topics\" key.\n\n{source_text}",
+            schema=TOPICS_SCHEMA,
+            timeout=120,
+            default={},
         )
-        try:
-            topics = json.loads(topics_raw)
-            if not isinstance(topics, list):
-                raise ValueError
-            topics = [str(t) for t in topics if t]
-        except Exception:
-            # Fallback: split by newline or use source as single topic
-            topics = [line.strip("- •*").strip() for line in topics_raw.split("\n") if line.strip()][:5]
-            if not topics:
-                topics = [source_text[:80]]
+        topics = [str(t) for t in topics_data.get("topics", []) if t]
+        if not topics:
+            topics = [source_text[:80]]
 
         # Step 2: Research each topic
         topic_reports = []
@@ -135,7 +133,7 @@ def run_research_sync(
             sources_text = "\n\n---\n\n".join(source_snippets)
             all_sources.extend(results)
 
-            synthesis = claude(
+            synthesis = ask(
                 f"You are writing a section of a research report. "
                 f"Based on the web sources below, write a detailed prose analysis of: {topic}\n\n"
                 f"Structure your response with these exact markdown headings:\n"
@@ -152,7 +150,7 @@ def run_research_sync(
         topics_combined = "\n\n".join(
             f"## {r['topic']}\n{r['synthesis']}" for r in topic_reports
         )
-        executive_summary = claude(
+        executive_summary = ask(
             f"Write a 2 to 3 paragraph executive summary synthesizing the following research findings. "
             f"Write only flowing prose — no headings, no JSON, no bullet points. "
             f"Focus on the most important insights and their implications.\n\n"

@@ -227,12 +227,12 @@ class TestChat:
         conn.commit()
         conn.close()
 
-        with patch("routers.chat.claude_call") as mock_claude:
+        with patch("routers.chat.llm_call") as mock_llm:
             r = await client.post(f"/chat/{CHAT_EPISODE_ID}/init")
 
         assert r.status_code == 200
         assert r.json()["id"] == msg_id
-        mock_claude.assert_not_called()  # Claude not called since message already exists
+        mock_llm.assert_not_called()  # agent not called since message already exists
 
         # Confirm no duplicate inserted
         r2 = await client.get(f"/chat/{CHAT_EPISODE_ID}")
@@ -250,12 +250,12 @@ class TestChat:
         """Full flow: init → get → message → get with mocked Claude."""
         seed_transcript(tmp_db)
 
-        async def mock_claude(prompt: str) -> str:
+        async def mock_llm(prompt: str) -> str:
             if "Summarize" in prompt or "bullet" in prompt.lower():
                 return "• Key insight 1\n• Key insight 2\n\nWhat would you like to explore?"
             return "The main topic was AI and its implications."
 
-        with patch("routers.chat.claude_call", side_effect=mock_claude):
+        with patch("routers.chat.llm_call", side_effect=mock_llm):
             # 1. Init chat
             r_init = await client.post(f"/chat/{CHAT_EPISODE_ID}/init")
             assert r_init.status_code == 200

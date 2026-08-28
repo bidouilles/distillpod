@@ -1,5 +1,5 @@
 """
-Chapterizer: uses Claude to segment a transcript into named chapters
+Chapterizer: uses the agent CLI to segment a transcript into named chapters
 and generate a short episode summary.
 
 Input:  words_json (same format as transcripts table)
@@ -15,16 +15,38 @@ Chapters are based on the ORIGINAL audio timestamps — applies equally
 to both original and ad-free versions (player adjusts for removed segments).
 """
 
-import json
-import subprocess
 from pathlib import Path
 
+import json
+
 from config import settings
-CLAUDE_BIN = settings.claude
+from services import llm
+
 TIMEOUT_SECS = 240
 
-# Max chars to send to Claude (keeps prompt manageable for long episodes)
+# Max chars to send to the model (keeps prompt manageable for long episodes)
 MAX_TRANSCRIPT_CHARS = 12000
+
+CHAPTERS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "chapters": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "start_time": {"type": "number"},
+                },
+                "required": ["title", "start_time"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["summary", "chapters"],
+    "additionalProperties": False,
+}
 
 
 def _words_to_dense_segments(words: list[dict], chunk_sec: float = 120.0) -> list[dict]:
@@ -94,8 +116,6 @@ The transcript below uses [MM:SS] timestamps. Total duration: {total_minutes} mi
 TRANSCRIPT:
 {transcript_text}
 
-Respond with valid JSON only — no markdown, no extra text, no code fences.
-
 Rules:
 1. Identify 4–10 meaningful topic shifts as chapters. Fewer is fine for short episodes.
 2. First chapter MUST start at 0.0 seconds (the very beginning).
@@ -103,31 +123,9 @@ Rules:
 4. Summary: 2–3 sentences capturing the core topic, key arguments, and main takeaway.
 5. start_time values are floats (seconds).
 
-Return exactly this JSON shape:
-{{
-  "summary": "Episode summary here.",
-  "chapters": [
-    {{"title": "Chapter name", "start_time": 0.0}},
-    {{"title": "Next topic", "start_time": 245.5}}
-  ]
-}}"""
+Give the episode summary under "summary" and the chapter list under "chapters"."""
 
-    result = subprocess.run(
-        [CLAUDE_BIN, '--print', prompt],
-        capture_output=True,
-        text=True,
-        timeout=TIMEOUT_SECS,
-    )
-
-    raw = result.stdout.strip()
-
-    # Strip markdown code fences if Claude wraps output anyway
-    if raw.startswith('```'):
-        raw = '\n'.join(raw.split('\n')[1:])
-        if raw.endswith('```'):
-            raw = raw[:-3].strip()
-
-    data = json.loads(raw)
+    data = llm.run_json(prompt, schema=CHAPTERS_SCHEMA, timeout=TIMEOUT_SECS)
 
     # Validate and normalise
     summary = str(data.get('summary', '')).strip()
@@ -138,7 +136,7 @@ Return exactly this JSON shape:
         if title:
             chapters.append({'title': title, 'start_time': start_time})
 
-    # Sort by start_time (Claude should already do this, but be safe)
+    # Sort by start_time (the model should already do this, but be safe)
     chapters.sort(key=lambda c: c['start_time'])
 
     # Ensure first chapter starts at 0

@@ -43,8 +43,8 @@ export default function Unauthorized() {
         </p>
         <p className="text-gray-400 text-xs leading-relaxed">
           The AI runs via the{" "}
-          <code className="text-indigo-300 bg-gray-800 px-1 rounded">claude</code>{" "}
-          CLI — called as a subprocess, authenticated through a Claude subscription.
+          <code className="text-indigo-300 bg-gray-800 px-1 rounded">codex</code>{" "}
+          CLI — called as a subprocess, authenticated through an existing subscription.
           No separate API billing.
         </p>
       </div>

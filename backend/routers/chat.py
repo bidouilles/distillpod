@@ -1,7 +1,5 @@
 import json
 import uuid
-import subprocess
-import asyncio
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
@@ -11,26 +9,14 @@ from database import get_db
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-from config import settings
-CLAUDE_BIN = settings.claude
+from services import llm
 
 
-def _claude_subprocess(prompt: str) -> str:
-    """Synchronous Claude call — run in thread pool to avoid blocking event loop."""
-    result = subprocess.run(
-        [CLAUDE_BIN, "--print", prompt],
-        capture_output=True, text=True, timeout=120
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"Claude error: {result.stderr[:200]}")
-    return result.stdout.strip()
-
-
-async def claude_call(prompt: str) -> str:
-    """Non-blocking wrapper using asyncio.to_thread."""
+async def llm_call(prompt: str) -> str:
+    """Free-text agent call, surfaced to the client as a 500 on failure."""
     try:
-        return await asyncio.to_thread(_claude_subprocess, prompt)
-    except RuntimeError as e:
+        return await llm.arun(prompt, timeout=120)
+    except llm.LLMError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -98,7 +84,7 @@ async def init_chat(episode_id: str):
             f'then invite the user to ask questions. Be concise.\n\n'
             f'Full transcript:\n{transcript}'
         )
-        content = await claude_call(prompt)
+        content = await llm_call(prompt)
 
         now = datetime.now(timezone.utc).isoformat()
         msg_id = str(uuid.uuid4())
@@ -141,7 +127,7 @@ async def send_message(episode_id: str, body: MessageBody):
             f"Conversation so far:\n{history_text}"
             f"User: {body.message}\n\nAssistant:"
         )
-        reply_content = await claude_call(prompt)
+        reply_content = await llm_call(prompt)
 
         now = datetime.now(timezone.utc).isoformat()
         user_id = str(uuid.uuid4())
