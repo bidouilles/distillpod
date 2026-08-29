@@ -563,9 +563,12 @@ export default function FullscreenPlayer() {
               <span className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-800 text-lg leading-none">×</span>
             </button>
           </div>
-          {/* Mounted only while open so the animation frame loop inside stops
-              when the sheet is dismissed. */}
-          {transcriptOpen && episode?.id && (
+          {/* Stays mounted across open/close so the transcript is fetched once
+              per episode rather than on every reopen — it is ~190KB for a long
+              episode, and this is a phone. Nothing runs while closed: the
+              fetch waits for the first open and the animation frame loop is
+              gated on `open`. */}
+          {episode?.id && (
             <LiveTranscript
               episodeId={episode.id}
               audioRef={audioRef}
