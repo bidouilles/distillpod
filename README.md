@@ -251,9 +251,36 @@ paste link ──▶ yt-dlp -J ──▶ episode row (+ channel as a subscriptio
                    └── none?     ──▶ yt-dlp -x mp3 ──▶ the usual STT backend
 ```
 
-**Requires `yt-dlp` on PATH** (`brew install yt-dlp` / `pipx install yt-dlp`),
-plus the ffmpeg you already need for ad-free audio. Set `YTDLP_BIN` if it lives
-somewhere unusual.
+**Requires a current `yt-dlp` on PATH**, plus the ffmpeg you already need for
+ad-free audio. Set `YTDLP_BIN` if it lives somewhere unusual.
+
+*Current* is not pedantry, and this is the one part of the feature that will
+bite on a server. YouTube changes its extractor constantly, so a yt-dlp more
+than a few months old degrades and an old one fails outright — Ubuntu 22.04's
+apt package (`2022.04.08`, with no newer candidate) could not extract so much as
+a video title. Distro packages are the trap here: install the official
+standalone binary instead, and keep it ahead of any packaged one on PATH.
+
+```bash
+# On a server, where /usr/local/bin precedes /usr/bin in the service PATH:
+curl -sSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux \
+  -o /usr/local/bin/yt-dlp && chmod 755 /usr/local/bin/yt-dlp
+```
+
+**A JavaScript runtime is worth installing too.** YouTube protects media URLs
+with an obfuscated JS challenge, and yt-dlp now runs it in a real engine rather
+than its own Python interpreter; without one it warns that extraction is
+deprecated and some formats may be missing. That is not theoretical — on a box
+without it, one test video came back with no captions and no chapters that a box
+with it extracted fine. `deno` is the default choice (yt-dlp runs the untrusted
+YouTube code inside its sandbox) and is a single binary:
+
+```bash
+curl -sSL -o /tmp/deno.zip \
+  https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip
+python3 -c "import zipfile; zipfile.ZipFile('/tmp/deno.zip').extractall('/usr/local/bin')"
+chmod 755 /usr/local/bin/deno
+```
 
 **Captions are used when the video has them.** YouTube's `json3` caption format
 carries a timestamp per *word*, which is exactly the shape `services/stt.py`
@@ -368,7 +395,7 @@ Re-adding a video you already have is a no-op that returns the existing episode.
 - Python 3.10+
 - Node.js 18+
 - ffmpeg (for ad-free audio generation)
-- yt-dlp — optional, only for [YouTube videos](#youtube-videos)
+- yt-dlp — optional, only for [YouTube videos](#youtube-videos), and it must be **current**
 - [Codex CLI](https://developers.openai.com/codex/cli) installed and authenticated (or the [Claude CLI](https://claude.ai/code) with `LLM_BACKEND=claude`)
 - A VPS with a few GB of RAM if you use faster-whisper (`medium` uses ~1.5GB); far less with Voxtral
 

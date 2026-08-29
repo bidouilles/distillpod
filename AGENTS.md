@@ -162,6 +162,13 @@ scripts/
   one, and `services/downloader.py` dispatches YouTube audio_urls to yt-dlp — so
   play, re-download and the daily sync all get it for free. The nightly sync
   skips `yt-` subscriptions: a channel's RSS carries no audio enclosures.
+- YouTube ingestion depends on a *current* `yt-dlp` on the box, not just any
+  yt-dlp: distro packages are years stale (Ubuntu 22.04 ships `2022.04.08` and
+  offers nothing newer) and fail to extract at all. The deployed VPS runs the
+  official standalone binary in `/usr/local/bin`, which precedes the apt one in
+  the service PATH, alongside `deno` — yt-dlp needs a JS runtime to solve
+  YouTube's signature challenge, and without it extraction is degraded enough to
+  lose captions and chapters on some videos. Neither is installed by `deploy.sh`.
 - YouTube captions are preferred over STT because `json3` gives a timestamp per
   word. But *human-written* subtitles put a whole line in one seg, and a
   phrase-long "word" breaks every seek — `youtube._words_from_json3` splits any

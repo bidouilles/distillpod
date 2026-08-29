@@ -159,6 +159,7 @@ async def add_video(req: AddVideoRequest):
     title = meta.get("title") or "Untitled video"
     thumbnail = meta.get("thumbnail")
     published = youtube.published_at(meta)
+    chapters = youtube.chapters(meta)
     now = datetime.now(timezone.utc).isoformat()
 
     db = await get_db()
@@ -195,11 +196,10 @@ async def add_video(req: AddVideoRequest):
              int(meta.get("duration") or 0) or None,
              published.isoformat() if published else None,
              thumbnail,
-             "done" if youtube.chapters(meta) else "none"),
+             "done" if chapters else "none"),
         )
 
         # The uploader's own chapter marks — free, and better than generated ones.
-        chapters = youtube.chapters(meta)
         if chapters:
             await db.execute("DELETE FROM chapters WHERE episode_id = ?", (episode_id,))
             for i, ch in enumerate(chapters):
@@ -220,7 +220,7 @@ async def add_video(req: AddVideoRequest):
         "channel": channel,
         "image_url": thumbnail,
         "duration_seconds": int(meta.get("duration") or 0) or None,
-        "chapters": len(youtube.chapters(meta)),
+        "chapters": len(chapters),
         "has_captions": bool(youtube.caption_track(meta)),
         "already_added": False,
     }
