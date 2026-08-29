@@ -79,7 +79,17 @@ function GistCard({ gist, podcastImage, onDelete }: { gist: Gist; podcastImage?:
           </svg>
           {fmtTime(gist.start_seconds)} → {fmtTime(gist.end_seconds)}
         </button>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          {/* A distill the listener never asked for should say so, so the
+              library stays trustworthy: these are suggestions, not decisions. */}
+          {gist.auto && (
+            <span
+              title="Picked automatically overnight"
+              className="text-[10px] text-amber-300/80 bg-amber-400/10 px-1.5 py-0.5 rounded-full whitespace-nowrap"
+            >
+              ⚙ auto
+            </span>
+          )}
           <button
             onClick={copy}
             className="text-xs text-gray-400 hover:text-white px-2 py-0.5 rounded hover:bg-gray-700 transition-colors"

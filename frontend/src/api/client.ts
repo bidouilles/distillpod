@@ -147,6 +147,8 @@ export interface Gist {
   episode_title: string; podcast_title: string;
   start_seconds: number; end_seconds: number;
   text: string; summary?: string; created_at: string;
+  /** Picked by the nightly job rather than tapped while listening. */
+  auto?: boolean;
 }
 
 // --- Chat ---
@@ -266,3 +268,8 @@ export const putProgress = (
 
 export const deleteProgress = (episodeId: string) =>
   req("DELETE", `/player/progress/${episodeId}`);
+
+/** Ask the server to pick highlights from an already-transcribed episode.
+ *  Returns immediately; poll listGists to see them arrive. */
+export const autoSnipEpisode = (episodeId: string) =>
+  req<{ episode_id: string; status: string }>("POST", `/gists/auto/${episodeId}`);

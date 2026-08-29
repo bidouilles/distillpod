@@ -32,6 +32,10 @@ log = logging.getLogger("distillpod-sync")
 # Only transcribe episodes published within this window (avoid transcribing old backlog)
 RECENCY_HOURS = 48
 
+# Each auto-snipped episode is one model call over a full transcript, so the
+# nightly run is capped rather than left to the size of the backlog.
+MAX_AUTO_SNIP_EPISODES = 3
+
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -51,7 +55,7 @@ def _telegram_notify(message: str) -> None:
 
 async def process_subscription(podcast_id: str, feed_url: str, title: str) -> dict:
     log.info(f"▶ {title}")
-    stats = {"new": 0, "downloaded": 0, "transcribed": 0, "skipped": 0}
+    stats = {"new": 0, "downloaded": 0, "transcribed": 0, "skipped": 0, "snipped": 0}
 
     # Fetch latest episodes from RSS
     try:
@@ -251,6 +255,60 @@ async def process_subscription(podcast_id: str, feed_url: str, title: str) -> di
                 await db.commit()
                 continue
 
+        # Auto-snips (after transcription + chapters)
+        #
+        # Scoped to recent episodes, unlike chapterization: each one costs a
+        # model call over a whole transcript, and on the first night after this
+        # shipped an unscoped query would try the entire back catalogue.
+        snip_cutoff = (datetime.now(timezone.utc) - timedelta(hours=RECENCY_HOURS)).isoformat()
+        episodes_for_snips = await db.execute_fetchall(
+            """SELECT e.id, e.title FROM episodes e
+               WHERE e.podcast_id = ? AND e.transcript_status = 'done'
+                 AND e.published_at > ?
+                 AND NOT EXISTS (
+                   SELECT 1 FROM gists g WHERE g.episode_id = e.id AND g.auto = 1
+                 )
+               ORDER BY e.published_at DESC
+               LIMIT ?""",
+            (podcast_id, snip_cutoff, MAX_AUTO_SNIP_EPISODES),
+        )
+        for ep_row in episodes_for_snips:
+            ep_id = ep_row['id']
+            try:
+                from services.auto_snipper import pick_snips, build_rows
+                transcript_row = await db.execute_fetchone(
+                    'SELECT words_json FROM transcripts WHERE episode_id = ?', (ep_id,)
+                )
+                if not transcript_row:
+                    continue
+                log.info(f'  Auto-snipping: {ep_row["title"][:50]}')
+
+                loop = asyncio.get_event_loop()
+                snips = await loop.run_in_executor(
+                    None, pick_snips, transcript_row['words_json']
+                )
+                if not snips:
+                    log.info('  no auto-snips picked')
+                    continue
+
+                rows = build_rows(snips, ep_id, podcast_id, ep_row['title'], title)
+                await db.executemany(
+                    """INSERT INTO gists
+                       (id, episode_id, podcast_id, episode_title, podcast_title,
+                        start_seconds, end_seconds, text, summary, created_at, auto)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    rows,
+                )
+                await db.commit()
+                stats['snipped'] = stats.get('snipped', 0) + len(rows)
+                log.info(f'  \u2713 {len(rows)} auto-snip(s) saved')
+
+            except Exception as exc:
+                # Never fatal: a missing auto-snip costs the user nothing, and
+                # the episode is still fully transcribed and chaptered.
+                log.warning(f'  Auto-snip failed for {ep_id}: {exc}')
+                continue
+
         # Update last_checked timestamp
         await db.execute(
             "UPDATE subscriptions SET last_checked = ? WHERE podcast_id = ?",
@@ -352,7 +410,7 @@ async def main() -> None:
 
     log.info(f"{len(subs)} subscription(s) found")
 
-    total = {"new": 0, "downloaded": 0, "transcribed": 0, "skipped": 0}
+    total = {"new": 0, "downloaded": 0, "transcribed": 0, "skipped": 0, "snipped": 0}
     for sub in subs:
         # A YouTube channel is a subscription only so the feed has something to
         # join against — videos are added one at a time, on purpose. Its RSS
@@ -371,6 +429,7 @@ async def main() -> None:
     log.info(
         f"Done — {total['new']} new episodes, "
         f"{total['transcribed']} transcribed, "
+        f"{total['snipped']} auto-snips, "
         f"{total['skipped']} skipped"
     )
     log.info("=" * 60)
