@@ -147,10 +147,26 @@ export default function LiveTranscript({
   }, [open, words, audioRef]);
 
   // Keep the spoken line centred, unless the reader has taken over the scroll.
+  //
+  // Scrolls this container explicitly rather than calling scrollIntoView on the
+  // line. scrollIntoView walks up and scrolls *every* scrollable ancestor, and
+  // the fullscreen player root is `overflow-hidden` — which still scrolls
+  // programmatically. Centring a line therefore dragged the whole player up by
+  // ~90px, opening a strip at the foot of the screen that the mini player and
+  // bottom nav showed through, over the transcript.
+  const centreActiveLine = useCallback((behavior: ScrollBehavior) => {
+    const box = scroller.current, line = activeLineEl.current;
+    if (!box || !line) return;
+    box.scrollTo({
+      top: Math.max(0, line.offsetTop - box.clientHeight / 2 + line.offsetHeight / 2),
+      behavior,
+    });
+  }, []);
+
   useEffect(() => {
     if (!following || activeLine < 0) return;
-    activeLineEl.current?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }, [activeLine, following]);
+    centreActiveLine("smooth");
+  }, [activeLine, following, centreActiveLine]);
 
   useEffect(() => { if (open) setFollowing(true); }, [open]);
 
@@ -160,7 +176,7 @@ export default function LiveTranscript({
 
   const resume = () => {
     setFollowing(true);
-    activeLineEl.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    centreActiveLine("smooth");
   };
 
   if (state === "loading" || state === "idle") {
@@ -179,7 +195,7 @@ export default function LiveTranscript({
         ref={scroller}
         onWheel={releaseFollow}
         onTouchMove={releaseFollow}
-        className="h-full overflow-y-auto px-5 py-4 space-y-3"
+        className="relative h-full overflow-y-auto px-5 py-4 space-y-3"
       >
         {lines.map((line, i) => {
           const isActive = i === activeLine;

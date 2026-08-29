@@ -477,11 +477,12 @@ export default function FullscreenPlayer() {
         )}
 
         {/* ── Chapters sheet — outside scroll container, covers all controls ──
-            Hidden with opacity as well as a translate: `translate-y-full`
-            shifts a sheet by its own height, which only clears the screen if
-            the sheet is tall. With few or no chapters this one is a ~90px
-            header, so it parked itself over the bottom nav — visible, and
-            swallowing taps meant for the nav behind it. */}
+            Hidden with opacity and pointer-events as well as a translate.
+            `translate-y-full` shifts a sheet by its own height, which clears
+            the screen only while this root is unscrolled; with few or no
+            chapters this one is a ~90px header, so it has very little room to
+            spare. Cheap insurance against it becoming a dead bar over the
+            bottom nav. */}
         <div
           className={`absolute inset-x-0 bottom-0 z-20 bg-gray-950 rounded-t-3xl transition-all duration-300 ease-out max-h-[70vh] flex flex-col ${
             chaptersOpen ? "translate-y-0" : "translate-y-full opacity-0 pointer-events-none"
@@ -496,9 +497,10 @@ export default function FullscreenPlayer() {
             <span className="text-sm font-bold text-white">Chapters ({chapters.length})</span>
             <button
               onClick={() => setChaptersOpen(false)}
-              className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white transition-colors text-lg leading-none"
+              aria-label="Close chapters"
+              className="-mr-2 w-11 h-11 flex items-center justify-center text-gray-400 hover:text-white transition-colors"
             >
-              ×
+              <span className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-800 text-lg leading-none">×</span>
             </button>
           </div>
           <div className="overflow-y-auto divide-y divide-gray-800/40">
@@ -555,9 +557,10 @@ export default function FullscreenPlayer() {
             </div>
             <button
               onClick={() => setTranscriptOpen(false)}
-              className="w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-full bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white transition-colors text-lg leading-none"
+              aria-label="Close transcript"
+              className="-mr-2 w-11 h-11 flex-shrink-0 flex items-center justify-center text-gray-400 hover:text-white transition-colors"
             >
-              ×
+              <span className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-800 text-lg leading-none">×</span>
             </button>
           </div>
           {/* Mounted only while open so the animation frame loop inside stops
