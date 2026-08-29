@@ -368,3 +368,73 @@ class TestTranscriptEndpoint:
     async def test_an_episode_with_no_transcript_is_a_404(self, client):
         r = await client.get(f"/player/transcript/{EPISODE_ID_1}")
         assert r.status_code == 404
+
+
+# ── /player/progress — cross-device resume ────────────────────────────────────
+
+class TestProgress:
+
+    async def test_nothing_started_yet(self, client):
+        r = await client.get("/player/progress")
+        assert r.status_code == 200 and r.json() == []
+
+    async def test_a_saved_position_comes_back_with_its_episode(self, client):
+        """A device that has never seen the episode still needs a title to show."""
+        await client.put(f"/player/progress/{EPISODE_ID_1}", json={"position": 42.5, "duration": 3600})
+        entries = (await client.get("/player/progress")).json()
+        assert len(entries) == 1
+        e = entries[0]
+        assert e["episode_id"] == EPISODE_ID_1
+        assert e["position"] == 42.5
+        assert e["played"] is False
+        assert e["title"] == "Episode One"
+        assert e["podcast_title"] == "Test Podcast"
+
+    async def test_saving_a_position_does_not_clear_the_finished_flag(self, client):
+        """The two events are independent: one fires constantly, one fires once."""
+        await client.put(f"/player/progress/{EPISODE_ID_1}", json={"played": True})
+        await client.put(f"/player/progress/{EPISODE_ID_1}", json={"position": 12.0})
+        e = (await client.get("/player/progress")).json()[0]
+        assert e["played"] is True
+        assert e["position"] == 12.0
+
+    async def test_marking_finished_does_not_rewind_the_position(self, client):
+        await client.put(f"/player/progress/{EPISODE_ID_1}", json={"position": 99.0, "duration": 100.0})
+        await client.put(f"/player/progress/{EPISODE_ID_1}", json={"played": True})
+        e = (await client.get("/player/progress")).json()[0]
+        assert e["position"] == 99.0
+        assert e["duration"] == 100.0
+        assert e["played"] is True
+
+    async def test_a_later_write_wins(self, client):
+        await client.put(f"/player/progress/{EPISODE_ID_1}", json={"position": 10.0})
+        await client.put(f"/player/progress/{EPISODE_ID_1}", json={"position": 250.0})
+        e = (await client.get("/player/progress")).json()[0]
+        assert e["position"] == 250.0
+
+    async def test_two_episodes_are_tracked_separately(self, client):
+        await client.put(f"/player/progress/{EPISODE_ID_1}", json={"position": 10.0})
+        await client.put(f"/player/progress/{EPISODE_ID_2}", json={"position": 20.0})
+        by_id = {e["episode_id"]: e for e in (await client.get("/player/progress")).json()}
+        assert by_id[EPISODE_ID_1]["position"] == 10.0
+        assert by_id[EPISODE_ID_2]["position"] == 20.0
+
+    async def test_a_negative_position_is_clamped(self, client):
+        await client.put(f"/player/progress/{EPISODE_ID_1}", json={"position": -5.0})
+        assert (await client.get("/player/progress")).json()[0]["position"] == 0.0
+
+    async def test_an_empty_update_is_rejected(self, client):
+        r = await client.put(f"/player/progress/{EPISODE_ID_1}", json={})
+        assert r.status_code == 400
+
+    async def test_forgetting_an_episode(self, client):
+        await client.put(f"/player/progress/{EPISODE_ID_1}", json={"position": 42.0})
+        assert (await client.delete(f"/player/progress/{EPISODE_ID_1}")).status_code == 200
+        assert (await client.get("/player/progress")).json() == []
+
+    async def test_progress_survives_for_an_episode_that_is_gone(self, client):
+        """A row whose episode was removed must not break the whole listing."""
+        await client.put("/player/progress/ghost_episode", json={"position": 5.0})
+        entries = (await client.get("/player/progress")).json()
+        ghost = next(e for e in entries if e["episode_id"] == "ghost_episode")
+        assert ghost["title"] is None

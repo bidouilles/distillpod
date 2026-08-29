@@ -41,6 +41,19 @@ CREATE TABLE IF NOT EXISTS transcripts (
     created_at  TEXT NOT NULL
 );
 
+-- Where you are in each episode, and which ones you have finished.
+-- Server-side rather than localStorage for the same reason tags are: an
+-- episode you started on the phone should resume on the laptop. The client
+-- still keeps a localStorage copy so a resume works offline and without
+-- waiting on a round trip; this is the copy the devices agree on.
+CREATE TABLE IF NOT EXISTS playback (
+    episode_id  TEXT PRIMARY KEY,
+    position    REAL NOT NULL DEFAULT 0,
+    duration    REAL,
+    played      INTEGER NOT NULL DEFAULT 0,
+    updated_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS suggestions (
     id                TEXT PRIMARY KEY,
     podcast_index_id  TEXT,

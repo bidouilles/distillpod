@@ -2,7 +2,9 @@ import {
   createContext, useContext, useRef, useState, useEffect, useCallback,
   type ReactNode, type RefObject,
 } from "react";
-import { startPlay, getEpisode, audioStreamUrl, type Episode } from "../api/client";
+import {
+  startPlay, getEpisode, audioStreamUrl, getProgress, putProgress, type Episode,
+} from "../api/client";
 import { useQueue } from "../stores/queueStore";
 
 // ─── Progress persistence ─────────────────────────────────────────────────────
@@ -41,6 +43,7 @@ function writeProgress(id: string, time: number, dur: number, ep: PlayableEpisod
     };
     localStorage.setItem(PROGRESS_KEY, JSON.stringify(map));
   } catch {}
+  sync(id, { position: time, duration: dur });
 }
 
 function clearProgress(id: string) {
@@ -48,6 +51,69 @@ function clearProgress(id: string) {
     const map = readProgress();
     delete map[id];
     localStorage.setItem(PROGRESS_KEY, JSON.stringify(map));
+  } catch {}
+  // Position only. Finishing an episode is what usually clears it, and that
+  // must not also erase the fact that it was finished.
+  sync(id, { position: 0 });
+}
+
+const PLAYED_KEY = "distillpod:played";
+
+export function readPlayed(): Set<string> {
+  try { return new Set(JSON.parse(localStorage.getItem(PLAYED_KEY) || "[]")); } catch { return new Set(); }
+}
+
+function markPlayed(id: string) {
+  try {
+    const played = readPlayed();
+    played.add(id);
+    localStorage.setItem(PLAYED_KEY, JSON.stringify([...played]));
+  } catch {}
+  sync(id, { played: true });
+}
+
+/** Fire and forget. A failed sync must never interrupt playback — the local
+ *  copy already holds the value, and the next save will carry it up. */
+function sync(id: string, body: { position?: number; duration?: number; played?: boolean }) {
+  putProgress(id, body).catch(() => {});
+}
+
+/**
+ * Reconcile this device with the server's copy, once, at startup.
+ *
+ * Whichever side was written later wins, per episode, so the device you just
+ * put down beats the one that has been sitting idle. `played` is merged as a
+ * union instead: it only ever goes one way, and a union cannot lose a finish
+ * that happened on another device.
+ */
+async function hydrateProgress(): Promise<void> {
+  try {
+    const records = await getProgress();
+    const map = readProgress();
+    const played = readPlayed();
+
+    for (const r of records) {
+      if (r.played) played.add(r.episode_id);
+      const serverAt = Date.parse(r.updated_at);
+      const local = map[r.episode_id];
+      if (local && local.savedAt >= serverAt) continue;   // this device is ahead
+      // Only a zeroed position means there is nothing to resume. `played` is
+      // set when an episode is *opened*, not when it is finished, so testing it
+      // here would discard the position of every episode ever started — the
+      // resume would silently fall back to 0 on a device that had not played
+      // it locally, which is precisely the case this whole feature exists for.
+      if (r.position <= 0) { delete map[r.episode_id]; continue; }
+      map[r.episode_id] = {
+        currentTime:   r.position,
+        duration:      r.duration ?? local?.duration ?? 0,
+        title:         r.title         ?? local?.title,
+        podcast_image: r.podcast_image ?? local?.podcast_image,
+        podcast_title: r.podcast_title ?? local?.podcast_title,
+        savedAt:       serverAt,
+      };
+    }
+    localStorage.setItem(PROGRESS_KEY, JSON.stringify(map));
+    localStorage.setItem(PLAYED_KEY, JSON.stringify([...played]));
   } catch {}
 }
 
@@ -139,6 +205,11 @@ export function AudioProvider({ children }: { children: ReactNode }) {
       navigator.mediaSession.setActionHandler(action, null)
     );
   }, []);
+
+  // Pull the server's copy in once, before the reader gets far enough to
+  // navigate. One small request; a failure just leaves this device on its own
+  // local copy, which is exactly the old behaviour.
+  useEffect(() => { hydrateProgress(); }, []);
 
   // Wire up persistent audio event listeners once on mount
   useEffect(() => {
@@ -266,12 +337,7 @@ export function AudioProvider({ children }: { children: ReactNode }) {
       play();
     }
 
-    // Mark as played in localStorage
-    try {
-      const played = new Set(JSON.parse(localStorage.getItem("distillpod:played") || "[]"));
-      played.add(id);
-      localStorage.setItem("distillpod:played", JSON.stringify([...played]));
-    } catch {}
+    markPlayed(id);
   }, [audioReady]);
 
   // Keep ref in sync so onEnded can call loadEpisode

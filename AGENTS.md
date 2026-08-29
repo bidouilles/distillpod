@@ -144,8 +144,20 @@ scripts/
 - Feed filtering is server-side (`GET /podcasts/feed?q=&tag_id=&status=`). It has
   to be: the feed is capped, so filtering the already-truncated page in the client
   would hide matches older than the cap.
-- Played state is localStorage only, so the "unplayed" filter is the one that
-  must stay client-side.
+- Playback position and played state live in the `playback` table, so an
+  episode started on the phone resumes on the laptop. localStorage is still
+  written first and read synchronously — it makes resume instant and works
+  offline — but the server is the copy the devices reconcile against, per
+  episode, last-write-wins, on `AudioContext.hydrateProgress` at startup.
+  `played` merges as a union instead, since it only ever goes one way.
+- `played` means the episode was *opened*, not finished: `markPlayed` is called
+  at the end of `loadEpisode`. It drives the "unplayed" feed filter. Anything
+  asking "is there something to resume" must test `position > 0` instead —
+  gating on `played` silently discards the position of every episode ever
+  started. The "Continue listening" rail and the hydration merge both got this
+  wrong once.
+- The "unplayed" filter still runs client-side, but now over synced state, so
+  it no longer disagrees between devices.
 - `TEST_MODE=true` bypasses auth entirely -- never set in production.
 - The model is invoked as a CLI subprocess, never via an HTTP API. Every call goes
   through `services/llm.py` — add features there, not with a new `subprocess.run`.

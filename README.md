@@ -126,6 +126,7 @@ subscription either way.
 
 - **📰 Home feed** — unified list of the latest episodes across all subscriptions, sorted by date. Shows distillation count per episode.
 - **🔎 Transcript search** — search what was actually *said* across every episode you have transcribed, and tap a result to jump straight to that moment in the audio. Accent-insensitive, so `retro` finds `rétro-ingénierie`. Search → **In my episodes**.
+- **↔️ Cross-device resume** — where you are in an episode and which ones you have opened are kept server-side, so you can start on the laptop and pick it up on the phone at the same second. A **Continue listening** rail on the home feed shows what you are part-way through. localStorage still backs it, so resume stays instant and works offline.
 - **🎤 Read along** — tap *Read along* in the player to follow the transcript while it plays, karaoke-style: the spoken line lifts out of the dimmed text and the current word is highlighted as it is said. Tap any line to jump there. Word-level timings make this exact rather than approximate.
 - **🏷️ Tags & filters** — tag your podcasts (`#tech`, `#français`, …) and filter the feed by tag, by title search, or by state: unplayed, transcribed, distilled, ad-free, downloaded. Filters combine, and searching looks across your whole library rather than just the page on screen.
 - **🔍 Search** — find podcasts via the iTunes Search API (no key needed). When the search box is empty, a **🤖 Suggested for you** section surfaces daily AI-generated recommendations based on your listening history.
