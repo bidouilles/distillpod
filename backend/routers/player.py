@@ -1,4 +1,5 @@
 import asyncio
+import json
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from models import PlayRequest, TranscriptStatus, Episode
@@ -157,6 +158,48 @@ async def stream_adfree(episode_id: str):
         return FileResponse(str(file_path), media_type='audio/mpeg')
     finally:
         await db.close()
+
+
+@router.get("/transcript/{episode_id}")
+async def get_transcript(episode_id: str):
+    """The whole transcript, for reading along while the audio plays.
+
+    Encoded as [start, end, text] triples rather than objects: an hour of
+    speech is ~10k words, and repeating three JSON keys on every one of them
+    roughly doubles the payload for no added meaning. Times are rounded to
+    10ms, which is finer than a spoken word boundary can be heard anyway.
+
+    Sent whole rather than windowed. The client needs to scroll the entire
+    transcript, and a range endpoint would turn one cached fetch per episode
+    into a request every few seconds of playback.
+    """
+    db = await get_db()
+    try:
+        row = await db.execute_fetchone(
+            "SELECT words_json, language FROM transcripts WHERE episode_id = ?",
+            (episode_id,),
+        )
+    finally:
+        await db.close()
+
+    if not row:
+        raise HTTPException(404, "No transcript for this episode")
+
+    try:
+        words = json.loads(row["words_json"])
+    except (TypeError, ValueError):
+        raise HTTPException(500, "Stored transcript is not readable")
+
+    return {
+        "episode_id": episode_id,
+        "language": row["language"],
+        "words": [
+            [round(float(w.get("start", 0)), 2),
+             round(float(w.get("end", 0)), 2),
+             w.get("word", "")]
+            for w in words
+        ],
+    }
 
 
 @router.get("/chapters/{episode_id}")

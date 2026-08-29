@@ -226,3 +226,17 @@ export interface YouTubeAddResult {
 
 export const addYoutubeVideo = (url: string) =>
   req<YouTubeAddResult>("POST", "/youtube/add", { url });
+
+// --- Read-along transcript ---
+// [start, end, text] triples rather than objects: an hour of speech is ~10k
+// words, and repeating three JSON keys on each roughly doubles the payload.
+export type TranscriptWord = [number, number, string];
+
+export interface TranscriptResult {
+  episode_id: string;
+  language?: string;
+  words: TranscriptWord[];
+}
+
+export const getTranscript = (episodeId: string) =>
+  req<TranscriptResult>("GET", `/player/transcript/${episodeId}`);

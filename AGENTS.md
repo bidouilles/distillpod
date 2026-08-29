@@ -125,6 +125,17 @@ scripts/
   `/tags`, `/search`, `/youtube`. Auth routes and frontend assets are public. `/chat` and `/research`
   were missing from that list and were reachable unauthenticated — anything new
   that reads user data or spends the model subscription must be added there.
+- The read-along view (`frontend/src/components/LiveTranscript.tsx`) takes its
+  position from the audio element on an animation frame, not from AudioContext's
+  `currentTime`: that state updates on `timeupdate`, roughly 4Hz, which is
+  visibly behind the voice, and every update re-renders the whole player. State
+  is set only when the active *word index* changes, and only the active line
+  renders per-word spans — styling all ~10k words of an hour-long episode
+  individually would make each highlight a full-document restyle.
+- `GET /player/transcript/{id}` sends `[start, end, text]` triples rather than
+  objects. Repeating three JSON keys per word roughly doubles a payload that is
+  already ~10k words an hour, and there is no gzip middleware (adding one would
+  also try to compress the audio responses).
 - Transcript search is two-stage: FTS5 (`transcripts_fts`) picks the episodes,
   then a Python walk over `words_json` finds the timestamp. FTS5 can produce a
   snippet but not a position in the audio, and the timestamp is the whole point.

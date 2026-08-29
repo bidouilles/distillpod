@@ -308,3 +308,63 @@ class TestTestModeConsistency:
     @pytest.mark.asyncio
     async def test_protected_route_open_in_test_mode(self, client):
         assert (await client.get("/podcasts/feed")).status_code == 200
+
+
+# ── /player/transcript — the read-along payload ───────────────────────────────
+
+TIMED_EPISODE_ID = "ep_timed_001"
+TIMED_WORDS = [
+    {"word": "Would",  "start": 0.16,   "end": 0.48},
+    {"word": " Rust",  "start": 0.48,   "end": 0.88},
+    {"word": " have",  "start": 0.881,  "end": 1.1249},
+]
+
+
+def seed_timed_transcript(db_path: str):
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT OR IGNORE INTO episodes (id, podcast_id, title, audio_url, transcript_status) VALUES (?, ?, ?, ?, ?)",
+        (TIMED_EPISODE_ID, PODCAST_ID, "Timed Episode", "https://audio.example.com/t.mp3", "done"),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO transcripts (episode_id, words_json, language, created_at) VALUES (?, ?, ?, ?)",
+        (TIMED_EPISODE_ID, json.dumps(TIMED_WORDS), "en", "2026-03-01T00:00:00"),
+    )
+    conn.commit()
+    conn.close()
+
+
+class TestTranscriptEndpoint:
+
+    async def test_words_come_back_as_compact_triples(self, client, tmp_db):
+        """[start, end, text], not objects — the payload is ~10k words an hour."""
+        seed_timed_transcript(tmp_db)
+        r = await client.get(f"/player/transcript/{TIMED_EPISODE_ID}")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["language"] == "en"
+        assert body["words"][0] == [0.16, 0.48, "Would"]
+
+    async def test_the_leading_space_survives_the_round_trip(self, client, tmp_db):
+        """Joining the words has to read as prose; the space lives on the word."""
+        seed_timed_transcript(tmp_db)
+        r = await client.get(f"/player/transcript/{TIMED_EPISODE_ID}")
+        words = r.json()["words"]
+        assert "".join(w[2] for w in words) == "Would Rust have"
+
+    async def test_times_are_rounded_to_ten_milliseconds(self, client, tmp_db):
+        """Finer than a spoken word boundary, and it keeps the payload small."""
+        seed_timed_transcript(tmp_db)
+        r = await client.get(f"/player/transcript/{TIMED_EPISODE_ID}")
+        assert r.json()["words"][2] == [0.88, 1.12, " have"]
+
+    async def test_a_transcript_without_timings_still_returns(self, client, tmp_db):
+        """Older rows carry no start/end; they must not 500 the reader."""
+        seed_transcript(tmp_db)
+        r = await client.get(f"/player/transcript/{CHAT_EPISODE_ID}")
+        assert r.status_code == 200
+        assert all(w[0] == 0 and w[1] == 0 for w in r.json()["words"])
+
+    async def test_an_episode_with_no_transcript_is_a_404(self, client):
+        r = await client.get(f"/player/transcript/{EPISODE_ID_1}")
+        assert r.status_code == 404
