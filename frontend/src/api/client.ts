@@ -208,3 +208,21 @@ export interface ChaptersResult {
 
 export const getChapters = (episodeId: string) =>
   req<ChaptersResult>('GET', `/player/chapters/${episodeId}`);
+
+// --- YouTube ---
+// A video is ingested as an ordinary episode, so nothing else in the client
+// needs to know it came from YouTube.
+export interface YouTubeAddResult {
+  episode_id: string;
+  podcast_id: string;
+  title: string;
+  channel?: string;
+  image_url?: string;
+  duration_seconds?: number;
+  chapters?: number;
+  has_captions?: boolean;
+  already_added: boolean;
+}
+
+export const addYoutubeVideo = (url: string) =>
+  req<YouTubeAddResult>("POST", "/youtube/add", { url });

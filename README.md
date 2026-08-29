@@ -134,6 +134,7 @@ subscription either way.
 - **✂️ Ad-free audio** — after transcription, the model classifies ad segments and ffmpeg cuts them out. Stream the clean version from the player.
 - **📖 Chapters** — the model generates 4–10 named chapters with timestamps from the full transcript. Tap any chapter to jump directly.
 - **💬 Episode chat** — ask questions about any transcribed episode. The model answers using the full transcript as context. History kept per episode (capped at 50 messages). Copy the whole conversation as Markdown or download it as a `.md` file from the chat header.
+- **📺 YouTube videos** — paste a link under Search → **YouTube** and the video joins your library as an ordinary episode: audio you can listen to, a word-level transcript, and every AI feature on top of it. Grouped under its channel, so videos filter and search like any show. See [YouTube videos](#youtube-videos).
 - **🔬 Research** — trigger a deep research report from any distillation. The model generates queries, Tavily runs web searches, then synthesizes findings into an HTML report. Delivered via Telegram.
 - **📋 Distillations library** — all your distillations grouped by episode. Copy, delete, or trigger research from any entry.
 - **⚡ Stale-while-revalidate caching** — data is cached in localStorage with a 30-minute TTL and refreshed silently in the background.
@@ -236,6 +237,60 @@ Whisper model sizes (`WHISPER_MODEL`): `base` fastest, `small`, `medium`
 
 ---
 
+## YouTube videos
+
+Sometimes what you want to listen to is on YouTube. Paste the link under
+Search → **YouTube** and it becomes an episode — nothing downstream knows the
+difference, so the player, transcript search, distills, chat and research all
+work on it unchanged.
+
+```
+paste link ──▶ yt-dlp -J ──▶ episode row (+ channel as a subscription)
+                   │
+                   ├── captions? ──▶ word-level transcript in seconds, free
+                   └── none?     ──▶ yt-dlp -x mp3 ──▶ the usual STT backend
+```
+
+**Requires `yt-dlp` on PATH** (`brew install yt-dlp` / `pipx install yt-dlp`),
+plus the ffmpeg you already need for ad-free audio. Set `YTDLP_BIN` if it lives
+somewhere unusual.
+
+**Captions are used when the video has them.** YouTube's `json3` caption format
+carries a timestamp per *word*, which is exactly the shape `services/stt.py`
+produces — so a captioned video is transcribed in seconds at no cost, and the
+STT backend is only woken for videos that have none. Human-written subtitles are
+preferred over auto-generated ones.
+
+**Always in the video's own language.** A French video is transcribed in French,
+an English one in English. YouTube offers auto-captions machine-translated into
+~157 languages, and an English transcript over French audio would make search
+match words nobody said and turn distill quotes into inventions — so only the
+original is ever taken, and a video whose language cannot be established falls
+through to speech-to-text rather than guessing. The language is resolved from
+yt-dlp's declared audio language, failing that from the single `<lang>-orig`
+caption key (which names the language speech recognition ran on), failing that
+from a lone hand-written subtitle track. Within that language the `-orig` track
+wins, since the bare language code is nominally the translation back into the
+same language.
+
+Two caveats worth knowing:
+
+- **Auto-caption timings are per word; human-written ones are per line.** A
+  subtitle line is split back into words and its span shared out across them, so
+  seeks land within a word rather than at the start of the line.
+- **No ad detection on the caption path.** Ad segmentation runs as part of an STT
+  transcription, so a captioned video skips it. Sponsor segments stay in.
+
+**The channel becomes a subscription** so videos group under whoever made them
+and the home feed (which joins on subscriptions) can show them. It is not
+polled: the nightly sync skips `yt-` subscriptions, because videos are added one
+at a time on purpose. The uploader's own chapter marks are imported when present
+— free, and better than generated ones.
+
+Re-adding a video you already have is a no-op that returns the existing episode.
+
+---
+
 ## Stack
 
 | Layer | Tech |
@@ -313,6 +368,7 @@ Whisper model sizes (`WHISPER_MODEL`): `base` fastest, `small`, `medium`
 - Python 3.10+
 - Node.js 18+
 - ffmpeg (for ad-free audio generation)
+- yt-dlp — optional, only for [YouTube videos](#youtube-videos)
 - [Codex CLI](https://developers.openai.com/codex/cli) installed and authenticated (or the [Claude CLI](https://claude.ai/code) with `LLM_BACKEND=claude`)
 - A VPS with a few GB of RAM if you use faster-whisper (`medium` uses ~1.5GB); far less with Voxtral
 
@@ -357,6 +413,7 @@ Copy `.env.example` to `backend/.env` and edit:
 | `STT_MODEL` | No | Voxtral model (default `voxtral-mini-latest`) |
 | `STT_LANGUAGE` | No | ISO code e.g. `fr`; empty auto-detects |
 | `WHISPER_MODEL` | No | Whisper model size: `base`, `small`, `medium` (default), `large-v3` |
+| `YTDLP_BIN` | No | Path to `yt-dlp`; resolved via PATH when empty |
 | `MEDIA_DIR` | No | Path for downloaded MP3s (default: `media/`) |
 | `REPORTS_DIR` | No | Path for HTML research reports (default: `reports/`) |
 

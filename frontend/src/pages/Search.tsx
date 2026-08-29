@@ -5,6 +5,7 @@ import {
   Podcast, Suggestion,
 } from "../api/client";
 import TranscriptSearch from "../components/TranscriptSearch";
+import AddYouTube from "../components/AddYouTube";
 
 // ─── Podcast card (shared by search results and suggestions) ──────────────────
 function PodcastCard({
@@ -66,7 +67,7 @@ export default function Search() {
   const [subscribedIds, setSubscribedIds] = useState<Set<string>>(new Set());
   const [subscribing, setSubscribing] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState("");
-  const [mode, setMode] = useState<"podcasts" | "transcripts">("podcasts");
+  const [mode, setMode] = useState<"podcasts" | "transcripts" | "youtube">("podcasts");
 
   // Suggestions state
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
@@ -116,11 +117,11 @@ export default function Search() {
         </div>
       )}
 
-      {/* Two different searches live here: finding new podcasts, and finding a
-          moment inside episodes you already have. A segmented control keeps the
-          second discoverable instead of hidden behind a menu. */}
+      {/* Three ways in: finding new podcasts, finding a moment inside episodes
+          you already have, and pulling in a one-off YouTube video. A segmented
+          control keeps the last two discoverable instead of hidden behind a menu. */}
       <div className="flex bg-gray-900 rounded-xl p-1 gap-1">
-        {([["podcasts", "Find podcasts"], ["transcripts", "In my episodes"]] as const).map(([key, label]) => (
+        {([["podcasts", "Podcasts"], ["transcripts", "In my episodes"], ["youtube", "YouTube"]] as const).map(([key, label]) => (
           <button
             key={key}
             onClick={() => setMode(key)}
@@ -135,6 +136,8 @@ export default function Search() {
       </div>
 
       {mode === "transcripts" && <TranscriptSearch />}
+
+      {mode === "youtube" && <AddYouTube />}
 
       {mode === "podcasts" && <>
 

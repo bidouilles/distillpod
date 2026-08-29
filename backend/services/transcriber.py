@@ -16,6 +16,31 @@ from database import get_db, index_transcript
 from services import stt
 
 
+async def store_transcript(db, episode_id: str, words: list[dict],
+                           language: str = "") -> str:
+    """Persist a word list as the episode's transcript and mark it done.
+
+    The one place a transcript is written, whichever backend produced it — the
+    STT run below, or YouTube's own captions. Keeping it single means the FTS
+    index can never be forgotten, which would silently make the episode
+    unsearchable. Returns the serialised words for callers that need them.
+    """
+    words_json = json.dumps(words)
+    await db.execute(
+        """INSERT OR REPLACE INTO transcripts (episode_id, words_json, language, created_at)
+           VALUES (?, ?, ?, ?)""",
+        (episode_id, words_json, language or settings.stt_language or "auto",
+         datetime.now(timezone.utc).isoformat())
+    )
+    await index_transcript(db, episode_id, words_json)
+    await db.execute(
+        "UPDATE episodes SET transcript_status = 'done' WHERE id = ?",
+        (episode_id,)
+    )
+    await db.commit()
+    return words_json
+
+
 async def transcribe_episode(episode_id: str, audio_path: Path) -> None:
     """
     Transcribe episode in background thread, save words to DB.
@@ -34,21 +59,7 @@ async def transcribe_episode(episode_id: str, audio_path: Path) -> None:
         loop = asyncio.get_event_loop()
         words = await loop.run_in_executor(None, stt.transcribe, str(audio_path))
 
-        words_json = json.dumps(words)
-
-        # Save transcript
-        await db.execute(
-            """INSERT OR REPLACE INTO transcripts (episode_id, words_json, language, created_at)
-               VALUES (?, ?, ?, ?)""",
-            (episode_id, words_json, settings.stt_language or "auto",
-             datetime.now(timezone.utc).isoformat())
-        )
-        await index_transcript(db, episode_id, words_json)
-        await db.execute(
-            "UPDATE episodes SET transcript_status = 'done' WHERE id = ?",
-            (episode_id,)
-        )
-        await db.commit()
+        words_json = await store_transcript(db, episode_id, words)
 
         # ── Ad detection + ad-free audio generation ──────────────────────────
         # Runs after transcript is committed; failure is non-fatal.

@@ -22,6 +22,9 @@ class Settings(BaseSettings):
         """Deprecated alias kept so any straggling caller keeps working."""
         return self.llm
 
+    # yt-dlp, for ingesting YouTube videos as episodes.
+    ytdlp_bin: str = ""    # explicit path; resolved via PATH when empty
+
     # Storage
     media_dir: Path = Path("media")
     db_path: Path = Path("distillpod.db")

@@ -74,6 +74,7 @@ Env file: `/etc/distillpod.env` (mode 600, owned by root, loaded via `Environmen
 | `STT_LANGUAGE` | ISO code e.g. `fr`; empty = auto-detect |
 | `WHISPER_MODEL` | Whisper model size (default: `medium`) |
 | `WHISPER_DEVICE` | Whisper device (default: `cpu`) |
+| `YTDLP_BIN` | Path to `yt-dlp` (optional, falls back to PATH) |
 | `TELEGRAM_BOT_TOKEN` | Telegram notifications (optional) |
 | `TELEGRAM_CHAT_ID` | Telegram chat ID (optional) |
 
@@ -90,6 +91,7 @@ backend/
     podcasts.py        # Search, subscribe, feed (+ filters), suggestions
     tags.py            # Tags on subscriptions: CRUD + assignment
     search.py          # Full-text search across transcripts
+    youtube.py         # Add a YouTube video as an episode
     player.py          # Download, stream audio, transcription status, chapters
     gists.py           # Create/list/delete AI gists (distillations)
     chat.py            # Per-episode AI chat
@@ -101,7 +103,8 @@ backend/
     stt.py             # Speech-to-text adapter — Voxtral, mlx-whisper, or faster-whisper
     podcast_index.py   # Podcast Index API client
     rss.py             # RSS feed parser
-    downloader.py      # Episode audio downloader
+    youtube.py         # yt-dlp adapter: metadata, captions, audio (no DB)
+    downloader.py      # Episode audio downloader (dispatches YouTube to yt-dlp)
     transcriber.py     # transcription orchestration + DB writes (STT lives in stt.py)
     snip_engine.py     # Gist extraction from transcript
     ad_detector.py     # Ad segment detection
@@ -119,7 +122,7 @@ scripts/
 
 - The backend serves the built frontend as a SPA catch-all -- no separate web server needed.
 - Protected API routes: `/gists`, `/podcasts`, `/player`, `/chat`, `/research`,
-  `/tags`. Auth routes and frontend assets are public. `/chat` and `/research`
+  `/tags`, `/search`, `/youtube`. Auth routes and frontend assets are public. `/chat` and `/research`
   were missing from that list and were reachable unauthenticated — anything new
   that reads user data or spends the model subscription must be added there.
 - Transcript search is two-stage: FTS5 (`transcripts_fts`) picks the episodes,
@@ -153,5 +156,18 @@ scripts/
 - Voxtral quantises timings to 0.1s and occasionally emits `end < start`;
   `stt._normalise` clamps that. Audio is downmixed to 16 kHz mono before upload,
   which keeps long episodes under the size limit and costs no accuracy.
+- A YouTube video is ingested as an ordinary `episodes` row, which is why no
+  feature had to learn about YouTube. Two things make that work: the channel is
+  written as a pseudo-subscription (`yt-<channel_id>`) because the feed joins on
+  one, and `services/downloader.py` dispatches YouTube audio_urls to yt-dlp — so
+  play, re-download and the daily sync all get it for free. The nightly sync
+  skips `yt-` subscriptions: a channel's RSS carries no audio enclosures.
+- YouTube captions are preferred over STT because `json3` gives a timestamp per
+  word. But *human-written* subtitles put a whole line in one seg, and a
+  phrase-long "word" breaks every seek — `youtube._words_from_json3` splits any
+  multi-word seg and shares the span across it. Do not simplify that away.
+  Machine-translated caption tracks are deliberately never selected.
+- Every transcript write goes through `transcriber.store_transcript`, whichever
+  backend produced it, so the FTS index cannot be forgotten.
 - Background tasks (transcription, research) run via `asyncio.create_task` -- they do not survive restarts.
 - Git remote: `upstream` -> `https://github.com/andrepaim/distillpod.git` (fork of andrepaim/distillpod).
