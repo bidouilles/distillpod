@@ -7,6 +7,7 @@ import {
 } from "../api/client";
 import { useAudio, readProgress, type PlayableEpisode } from "../context/AudioContext";
 import { copyText, downloadText, slugify } from "../lib/clipboard";
+import { CopyButton, ShareButton, DownloadIcon } from "../components/ActionButtons";
 import { useQueue, type QueueItem } from "../stores/queueStore";
 
 function stripHtml(html: string): string {
@@ -72,8 +73,6 @@ function parseGistSummary(s: string | undefined): { quote?: string; insight?: st
 function GistCard({ gist, episodeTitle, podcastTitle }: {
   gist: Gist; episodeTitle?: string; podcastTitle?: string;
 }) {
-  const [copied, setCopied] = useState(false);
-  const [shared, setShared] = useState(false);
   const ai = parseGistSummary(gist.summary);
 
   const buildShareText = () => {
@@ -93,33 +92,6 @@ function GistCard({ gist, episodeTitle, podcastTitle }: {
     return lines.join("\n");
   };
 
-  const copy = async () => {
-    await navigator.clipboard.writeText(buildShareText());
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const share = async () => {
-    const text = buildShareText();
-    if (navigator.share) {
-      try {
-        await navigator.share({ text });
-        setShared(true);
-        setTimeout(() => setShared(false), 2000);
-      } catch (e: any) {
-        if (e?.name !== "AbortError") {
-          await navigator.clipboard.writeText(text);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-        }
-      }
-    } else {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
-
   return (
     <div className="bg-gray-900 rounded-2xl p-4 space-y-2">
       <div className="flex items-center justify-between">
@@ -127,23 +99,8 @@ function GistCard({ gist, episodeTitle, podcastTitle }: {
           {fmtTime(gist.start_seconds)} → {fmtTime(gist.end_seconds)}
         </span>
         <div className="flex gap-1">
-          <button onClick={copy}
-            className="text-xs font-semibold text-gray-300 hover:text-white bg-gray-700 hover:bg-gray-600 active:bg-gray-500 px-3 py-1 rounded-full transition-colors">
-            {copied ? "✓ Copied" : "Copy"}
-          </button>
-          <button onClick={share}
-            className="flex items-center gap-1 text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white px-3 py-1 rounded-full transition-colors">
-            {shared ? <span>✓ Shared</span> : (
-              <>
-                <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
-                  <polyline points="16 6 12 2 8 6" />
-                  <line x1="12" y1="2" x2="12" y2="15" />
-                </svg>
-                Share
-              </>
-            )}
-          </button>
+          <CopyButton getText={buildShareText} variant="pill" />
+          <ShareButton getText={buildShareText} getTitle={() => gist.episode_title} variant="pill" />
         </div>
       </div>
       <div className="selectable">
@@ -181,7 +138,6 @@ export default function Player() {
   const [snipping, setSnipping]       = useState(false);
   const [noteMd, setNoteMd]           = useState<string | null>(null);
   const [briefing, setBriefing]       = useState(false);
-  const [summaryCopied, setSummaryCopied] = useState(false);
   const [noteState, setNoteState]     = useState<"idle" | "building" | "copied" | "failed">("idle");
   const snipPoll                      = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const [chaptersOpen, setChaptersOpen] = useState(false);
@@ -249,30 +205,6 @@ export default function Player() {
     const src = displayEpisode?.audio_url;
     if (src) parts.push(src);
     return parts.filter(Boolean).join("\n\n");
-  };
-
-  const copySummary = async () => {
-    const ok = await copyText(summaryText());
-    setSummaryCopied(ok);
-    setTimeout(() => setSummaryCopied(false), 1500);
-  };
-
-  const shareSummary = async () => {
-    try {
-      await navigator.share({ title: displayEpisode?.title || "Episode", text: summaryText() });
-    } catch { /* dismissed — nothing to report */ }
-  };
-
-  // The share sheet is how a note reaches Obsidian on a phone. Not every
-  // browser has it, so it is offered only where it exists — copy and the .md
-  // download cover the rest.
-  const canShare = typeof navigator !== "undefined" && !!navigator.share;
-
-  const shareNote = async () => {
-    if (!noteMd) return;
-    try {
-      await navigator.share({ title: displayEpisode?.title || "Episode note", text: noteMd });
-    } catch { /* dismissed, or the sheet refused — nothing to report */ }
   };
 
   const buildNote = async () => {
@@ -590,26 +522,8 @@ export default function Player() {
                 ✦ AI Summary
               </p>
               <div className="flex items-center flex-shrink-0">
-                <button
-                  onClick={copySummary}
-                  aria-label="Copy summary"
-                  title="Copy summary"
-                  className={`w-11 h-11 flex items-center justify-center rounded-lg text-sm transition-colors ${
-                    summaryCopied ? "text-green-400" : "text-gray-500 hover:text-white"
-                  }`}
-                >
-                  {summaryCopied ? "✓" : "📋"}
-                </button>
-                {canShare && (
-                  <button
-                    onClick={shareSummary}
-                    aria-label="Share summary"
-                    title="Share summary"
-                    className="w-11 h-11 flex items-center justify-center rounded-lg text-sm text-gray-500 hover:text-white transition-colors"
-                  >
-                    ↗
-                  </button>
-                )}
+                <CopyButton getText={summaryText} label="Copy summary" />
+                <ShareButton getText={summaryText} getTitle={() => displayEpisode?.title || "Episode"} label="Share summary" />
               </div>
             </div>
             <p className="text-sm text-gray-200 leading-relaxed selectable whitespace-pre-line">
@@ -746,22 +660,24 @@ export default function Player() {
                 : noteState === "failed" ? "✗ Try again"
                 : <>📝 Obsidian note</>}
             </button>
-            {noteMd && canShare && (
-              <button
-                onClick={shareNote}
-                className="min-h-[44px] px-4 rounded-xl bg-indigo-700 hover:bg-indigo-600 text-sm text-white font-medium transition-colors"
-                title="Share the note"
-              >
-                ↗ Share
-              </button>
+            {noteMd && (
+              <ShareButton
+                getText={() => noteMd}
+                getTitle={() => displayEpisode?.title || "Episode note"}
+                label="Share"
+                variant="pill"
+                className="min-h-[44px] px-4 bg-gray-800 hover:bg-gray-700 text-sm"
+              />
             )}
             {noteMd && (
               <button
                 onClick={() => downloadText(`${slugify(displayEpisode?.title || "episode")}.md`, noteMd)}
-                className="min-h-[44px] px-4 rounded-xl bg-gray-800 hover:bg-gray-700 text-sm text-gray-300 font-medium transition-colors"
+                aria-label="Download as .md"
                 title="Download as .md"
+                className="min-h-[44px] px-4 rounded-full inline-flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 text-sm text-gray-300 font-semibold transition-colors"
               >
-                ⬇ .md
+                <DownloadIcon />
+                <span>.md</span>
               </button>
             )}
           </div>

@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from "react";
+import { CopyButton } from "../components/ActionButtons";
 import { useNavigate } from "react-router-dom";
 import { listGists, deleteGist, getSubscriptions, triggerResearch, getResearch, Gist, Subscription, Research } from "../api/client";
 
@@ -24,7 +25,6 @@ function parseGistSummary(summary: string | undefined): { quote?: string; insigh
 
 function GistCard({ gist, podcastImage, onDelete }: { gist: Gist; podcastImage?: string; onDelete: () => void }) {
   const nav = useNavigate();
-  const [copied, setCopied] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [research, setResearch] = useState<Research>({ status: "none" });
   const pollRef = useRef<ReturnType<typeof setInterval>>(undefined);
@@ -44,15 +44,6 @@ function GistCard({ gist, podcastImage, onDelete }: { gist: Gist; podcastImage?:
     }
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [research.status, gist.id]);
-
-  const copy = async () => {
-    const text = ai
-      ? [ai.quote && `"${ai.quote}"`, ai.insight].filter(Boolean).join("\n\n")
-      : gist.text;
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   const handleDelete = async () => {
     if (!confirm("Delete this shot?")) return;
@@ -90,12 +81,12 @@ function GistCard({ gist, podcastImage, onDelete }: { gist: Gist; podcastImage?:
               ⚙ auto
             </span>
           )}
-          <button
-            onClick={copy}
-            className="text-xs text-gray-400 hover:text-white px-2 py-0.5 rounded hover:bg-gray-700 transition-colors"
-          >
-            {copied ? "✓ Copied" : "📋 Copy"}
-          </button>
+          <CopyButton
+            getText={() => (ai
+              ? [ai.quote && `"${ai.quote}"`, ai.insight].filter(Boolean).join("\n\n")
+              : gist.text)}
+            variant="pill"
+          />
           <button
             onClick={handleDelete}
             disabled={deleting}
