@@ -168,7 +168,11 @@ async def sync_channel(
             )
         }
         fresh = [v for v in videos if episode_id_for(v["video_id"]) not in known][:max_new]
-        for video in fresh:
+        # Every listed video, not just the new ones. The upsert is one gap-filling
+        # statement with no network cost, and running it over the whole listing is
+        # what repairs rows imported before a fix — a re-sync is otherwise unable
+        # to correct anything it has already seen.
+        for video in videos:
             await upsert_listing_video(db, video, podcast_id)
         await db.commit()
         stats["new"] = len(fresh)
