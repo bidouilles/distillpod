@@ -758,3 +758,23 @@ class TestChannelRefresh:
             r = await client.get("/podcasts/yt-UCbroken/episodes?refresh=true")
         assert r.status_code == 502
         assert "rate limited" in r.json()["detail"]
+
+
+class TestListingDates:
+    """A missing publish date sinks an episode in the feed and puts it outside
+    the nightly recency window, so the listing must always carry one."""
+
+    def test_the_listing_asks_for_approximate_dates(self):
+        proc = MagicMock(stdout=json.dumps({"entries": []}))
+        with patch.object(youtube, "_run", return_value=proc) as run:
+            youtube._channel_videos_blocking("UC123", 15)
+        argv = run.call_args.args[0]
+        assert "--extractor-args" in argv
+        assert "youtubetab:approximate_date" in argv
+
+    def test_the_tab_timestamp_is_used_when_the_feed_is_unreachable(self):
+        """The Atom feed 404s from some addresses; the tab date carries it then."""
+        proc = MagicMock(stdout=json.dumps({"entries": [_entry("aaaaaaaaaaa", ts=1788062400)]}))
+        with patch.object(youtube, "_run", return_value=proc):
+            vids = youtube._channel_videos_blocking("UC123", 15)
+        assert vids[0]["published_at"].year == 2026

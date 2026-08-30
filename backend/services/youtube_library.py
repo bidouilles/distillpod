@@ -120,9 +120,10 @@ async def upsert_video(db, meta: dict, podcast_id: str) -> str:
 async def upsert_listing_video(db, video: dict, podcast_id: str) -> str:
     """Create an episode row from the channel listing alone.
 
-    Does nothing when the episode already exists: a video added by hand has a
-    description and the uploader's chapters, and the listing has neither, so
-    overwriting would be a downgrade.
+    Fills gaps on an existing row but never overwrites: a video added by hand
+    carries a description and the uploader's chapters, and the listing carries
+    neither, so replacing it would be a downgrade. COALESCE lets a re-sync
+    repair a row that was imported without a publish date.
     """
     episode_id = episode_id_for(video["video_id"])
     published = video.get("published_at")
@@ -131,7 +132,10 @@ async def upsert_listing_video(db, video: dict, podcast_id: str) -> str:
            (id, podcast_id, title, description, audio_url, duration_seconds,
             published_at, image_url, transcript_status, chapters_status)
            VALUES (?, ?, ?, '', ?, ?, ?, ?, 'none', 'none')
-           ON CONFLICT(id) DO NOTHING""",
+           ON CONFLICT(id) DO UPDATE SET
+             published_at = COALESCE(episodes.published_at, excluded.published_at),
+             duration_seconds = COALESCE(episodes.duration_seconds, excluded.duration_seconds),
+             image_url = COALESCE(episodes.image_url, excluded.image_url)""",
         (episode_id, podcast_id, video["title"], video["url"],
          video.get("duration_seconds"),
          published.isoformat() if published else None,

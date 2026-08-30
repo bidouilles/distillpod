@@ -171,6 +171,10 @@ async def resolve_channel(url: str) -> dict:
 def _channel_videos_blocking(channel_id: str, limit: int) -> list[dict]:
     out = _run(
         ["-J", "--flat-playlist", "--playlist-items", f"1-{limit}", "--no-warnings",
+         # Without this the tab reports a null timestamp for many channels, and
+         # an episode with no publish date sinks in the feed and falls outside
+         # the nightly recency window. Day-granular is plenty for ordering.
+         "--extractor-args", "youtubetab:approximate_date",
          channel_videos_url(channel_id)],
         METADATA_TIMEOUT,
     )
