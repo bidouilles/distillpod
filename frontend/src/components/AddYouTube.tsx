@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { addYoutubeVideo, getTranscriptStatus, YouTubeAddResult } from "../api/client";
+import { addYoutubeVideo, getEpisodes, getTranscriptStatus, YouTubeAddResult } from "../api/client";
 
 const fmtDuration = (s?: number) => {
   if (!s) return "";
@@ -24,6 +24,7 @@ export default function AddYouTube() {
   const [error, setError] = useState("");
   const [added, setAdded] = useState<YouTubeAddResult | null>(null);
   const [status, setStatus] = useState<string>("");
+  const [imported, setImported] = useState<number | null>(null);
   const poll = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   // Poll until the transcript settles. Captions land in seconds; a video with
@@ -43,10 +44,29 @@ export default function AddYouTube() {
     return () => clearInterval(poll.current);
   }, [added, status]);
 
+  // A channel imports in the background, so the card has to stop claiming it is
+  // still importing once the episodes are in.
+  useEffect(() => {
+    if (!added || added.kind !== "channel") return;
+    let stop = false;
+    let tries = 0;
+    const tick = async () => {
+      tries += 1;
+      try {
+        const eps = await getEpisodes(added.podcast_id);
+        if (stop) return;
+        if (eps.length > 0) { setImported(eps.length); return; }
+      } catch { /* transient */ }
+      if (!stop && tries < 20) setTimeout(tick, 3000);
+    };
+    tick();
+    return () => { stop = true; };
+  }, [added]);
+
   const submit = async () => {
     const trimmed = url.trim();
     if (!trimmed || busy) return;
-    setBusy(true); setError(""); setAdded(null); setStatus("");
+    setBusy(true); setError(""); setAdded(null); setStatus(""); setImported(null);
     try {
       const r = await addYoutubeVideo(trimmed);
       setAdded(r);
@@ -102,7 +122,9 @@ export default function AddYouTube() {
             <div className="font-semibold text-sm line-clamp-2">{added.title}</div>
             <div className="text-gray-400 text-xs mt-0.5">
               {added.kind === "channel"
-                ? "Subscribed · importing recent videos…"
+                ? (imported === null
+                    ? "Subscribed · importing recent videos…"
+                    : `Subscribed · ${imported} video${imported === 1 ? "" : "s"} imported`)
                 : [added.channel, fmtDuration(added.duration_seconds)].filter(Boolean).join(" · ")}
             </div>
             <div className={`text-xs mt-1 ${status === "error" ? "text-amber-400" : "text-indigo-400"} ${added.kind === "channel" ? "hidden" : ""}`}>

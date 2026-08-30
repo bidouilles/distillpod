@@ -710,3 +710,51 @@ class TestChannelIdentity:
             ch = youtube._resolve_channel_blocking("https://www.youtube.com/@LowLevelTV")
         assert ch["channel_id"] == "UC6biysICWOJ-C3P4Tyeggzg"
         assert ch["title"] == "Low Level"
+
+
+@pytest.mark.asyncio
+class TestChannelRefresh:
+    """The refresh control on a channel page must not go through the RSS parser."""
+
+    async def test_refreshing_a_channel_syncs_it(self, client):
+        import sqlite3, database
+        conn = sqlite3.connect(database.DB_PATH)
+        conn.execute(
+            "INSERT OR IGNORE INTO subscriptions (podcast_id, feed_url, title, subscribed_at) VALUES (?, ?, ?, ?)",
+            ("yt-UC6biysICWOJ-C3P4Tyeggzg",
+             "https://www.youtube.com/channel/UC6biysICWOJ-C3P4Tyeggzg/videos",
+             "Low Level", "2026-01-01T00:00:00"),
+        )
+        conn.commit(); conn.close()
+
+        with patch("services.youtube_library.sync_channel", AsyncMock(return_value={})) as sync, \
+             patch("services.rss.fetch_episodes", AsyncMock(return_value=[])) as rss_fetch:
+            r = await client.get("/podcasts/yt-UC6biysICWOJ-C3P4Tyeggzg/episodes?refresh=true")
+
+        assert r.status_code == 200
+        sync.assert_awaited_once()
+        assert sync.await_args.args[0] == "UC6biysICWOJ-C3P4Tyeggzg"
+        assert not rss_fetch.called      # the /videos URL is HTML, not a feed
+
+    async def test_a_podcast_still_refreshes_through_rss(self, client, seeded_podcast_id):
+        with patch("services.youtube_library.sync_channel", AsyncMock()) as sync, \
+             patch("services.rss.fetch_episodes", AsyncMock(return_value=[])) as rss_fetch:
+            r = await client.get(f"/podcasts/{seeded_podcast_id}/episodes?refresh=true")
+        assert r.status_code == 200
+        assert rss_fetch.called
+        assert not sync.called
+
+    async def test_a_failed_channel_refresh_surfaces_rather_than_silently_doing_nothing(self, client):
+        import sqlite3, database
+        conn = sqlite3.connect(database.DB_PATH)
+        conn.execute(
+            "INSERT OR IGNORE INTO subscriptions (podcast_id, feed_url, title, subscribed_at) VALUES (?, ?, ?, ?)",
+            ("yt-UCbroken", "https://www.youtube.com/channel/UCbroken/videos", "Broken", "2026-01-01T00:00:00"),
+        )
+        conn.commit(); conn.close()
+
+        with patch("services.youtube_library.sync_channel",
+                   AsyncMock(side_effect=youtube.YouTubeError("rate limited"))):
+            r = await client.get("/podcasts/yt-UCbroken/episodes?refresh=true")
+        assert r.status_code == 502
+        assert "rate limited" in r.json()["detail"]
