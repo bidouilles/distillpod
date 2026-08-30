@@ -471,3 +471,94 @@ class TestBriefEndpoint:
 
     async def test_an_unknown_episode_is_a_404(self, client):
         assert (await client.get("/player/brief/nope")).status_code == 404
+
+
+class TestRefreshSubscriptions:
+    """The control implies "go and look"; before this it only re-read the DB.
+
+    The work runs as a background task so it outlives the screen that started
+    it, which is why these poll for it to finish rather than reading the POST.
+    """
+
+    @staticmethod
+    async def _settle(client):
+        import asyncio
+        for _ in range(50):
+            await asyncio.sleep(0.02)
+            state = (await client.get("/podcasts/refresh/status")).json()
+            if not state["running"]:
+                return state
+        raise AssertionError("refresh never finished")
+
+    async def test_the_post_returns_before_the_work_does(self, client, seeded_podcast_id):
+        with patch("services.rss.fetch_episodes", AsyncMock(return_value=[])):
+            r = await client.post("/podcasts/refresh")
+            assert r.json()["status"] == "started"
+            await self._settle(client)
+
+    async def test_a_second_press_does_not_stack_another_run(self, client, seeded_podcast_id):
+        with patch("services.rss.fetch_episodes", AsyncMock(return_value=[])):
+            await client.post("/podcasts/refresh")
+            again = await client.post("/podcasts/refresh")
+            await self._settle(client)
+        assert again.json()["status"] in ("already_running", "started")
+
+    async def test_a_podcast_is_refreshed_through_rss(self, client, seeded_podcast_id):
+        with patch("services.rss.fetch_episodes", AsyncMock(return_value=[])) as rss_fetch:
+            await client.post("/podcasts/refresh")
+            state = await self._settle(client)
+        assert state["checked"] == 1 and state["failed"] == 0
+        assert rss_fetch.called
+
+    async def test_a_youtube_channel_is_refreshed_through_the_channel_sync(self, client, tmp_db):
+        conn = sqlite3.connect(tmp_db)
+        conn.execute(
+            "INSERT INTO subscriptions (podcast_id, feed_url, title, subscribed_at) VALUES (?, ?, ?, ?)",
+            ("yt-UC6biysICWOJ-C3P4Tyeggzg", "https://www.youtube.com/channel/UC.../videos",
+             "Low Level", "2026-01-01T00:00:00"),
+        )
+        conn.commit(); conn.close()
+
+        with patch("services.youtube_library.sync_channel", AsyncMock(return_value={})) as sync, \
+             patch("services.rss.fetch_episodes", AsyncMock(return_value=[])):
+            await client.post("/podcasts/refresh")
+            await self._settle(client)
+        sync.assert_awaited_once()
+        assert sync.await_args.args[0] == "UC6biysICWOJ-C3P4Tyeggzg"
+
+    async def test_one_dead_feed_does_not_stop_the_others(self, client, tmp_db):
+        conn = sqlite3.connect(tmp_db)
+        conn.execute(
+            "INSERT INTO subscriptions (podcast_id, feed_url, title, subscribed_at) VALUES (?, ?, ?, ?)",
+            ("pod_dead", "https://dead.example.com/feed", "Dead", "2026-01-01T00:00:00"),
+        )
+        conn.commit(); conn.close()
+
+        async def flaky(feed_url, podcast_id, limit=20):
+            if "dead" in feed_url:
+                raise RuntimeError("gone")
+            return []
+
+        with patch("services.rss.fetch_episodes", AsyncMock(side_effect=flaky)):
+            await client.post("/podcasts/refresh")
+            state = await self._settle(client)
+        assert state["checked"] == 2      # both were attempted
+        assert state["failed"] == 1
+
+    async def test_new_episodes_are_counted(self, client, seeded_podcast_id):
+        from models import Episode
+        fresh = [Episode(id="brand_new_ep", podcast_id=seeded_podcast_id, title="New one",
+                         audio_url="https://audio.example.com/new.mp3")]
+        with patch("services.rss.fetch_episodes", AsyncMock(return_value=fresh)):
+            await client.post("/podcasts/refresh")
+            state = await self._settle(client)
+        assert state["new"] == 1
+
+    async def test_an_episode_already_stored_is_not_counted_again(self, client, seeded_podcast_id):
+        from models import Episode
+        existing = [Episode(id=EPISODE_ID_1, podcast_id=seeded_podcast_id, title="Episode One",
+                            audio_url="https://audio.example.com/1.mp3")]
+        with patch("services.rss.fetch_episodes", AsyncMock(return_value=existing)):
+            await client.post("/podcasts/refresh")
+            state = await self._settle(client)
+        assert state["new"] == 0

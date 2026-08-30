@@ -181,6 +181,7 @@ export default function Player() {
   const [snipping, setSnipping]       = useState(false);
   const [noteMd, setNoteMd]           = useState<string | null>(null);
   const [briefing, setBriefing]       = useState(false);
+  const [summaryCopied, setSummaryCopied] = useState(false);
   const [noteState, setNoteState]     = useState<"idle" | "building" | "copied" | "failed">("idle");
   const snipPoll                      = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const [chaptersOpen, setChaptersOpen] = useState(false);
@@ -239,6 +240,28 @@ export default function Player() {
       .finally(() => { if (!cancelled) setBriefing(false); });
     return () => { cancelled = true; };
   }, [episodeId, chaptersData, displayEpisode?.transcript_status]);
+
+  // The summary is the most sendable thing on the page — the answer to "what
+  // is this about" — so it gets its own copy and share, rather than making
+  // someone build the whole note to pass on two sentences.
+  const summaryText = () => {
+    const parts = [displayEpisode?.title, chaptersData?.summary];
+    const src = displayEpisode?.audio_url;
+    if (src) parts.push(src);
+    return parts.filter(Boolean).join("\n\n");
+  };
+
+  const copySummary = async () => {
+    const ok = await copyText(summaryText());
+    setSummaryCopied(ok);
+    setTimeout(() => setSummaryCopied(false), 1500);
+  };
+
+  const shareSummary = async () => {
+    try {
+      await navigator.share({ title: displayEpisode?.title || "Episode", text: summaryText() });
+    } catch { /* dismissed — nothing to report */ }
+  };
 
   // The share sheet is how a note reaches Obsidian on a phone. Not every
   // browser has it, so it is offered only where it exists — copy and the .md
@@ -562,9 +585,33 @@ export default function Player() {
         {/* AI Summary (or description fallback) */}
         {chaptersData?.summary ? (
           <div className="bg-gray-900 rounded-2xl px-4 py-4">
-            <p className="text-xs font-semibold text-indigo-400 uppercase tracking-wider mb-2">
-              ✦ AI Summary
-            </p>
+            <div className="flex items-center justify-between mb-2 -mr-2">
+              <p className="text-xs font-semibold text-indigo-400 uppercase tracking-wider">
+                ✦ AI Summary
+              </p>
+              <div className="flex items-center flex-shrink-0">
+                <button
+                  onClick={copySummary}
+                  aria-label="Copy summary"
+                  title="Copy summary"
+                  className={`w-11 h-11 flex items-center justify-center rounded-lg text-sm transition-colors ${
+                    summaryCopied ? "text-green-400" : "text-gray-500 hover:text-white"
+                  }`}
+                >
+                  {summaryCopied ? "✓" : "📋"}
+                </button>
+                {canShare && (
+                  <button
+                    onClick={shareSummary}
+                    aria-label="Share summary"
+                    title="Share summary"
+                    className="w-11 h-11 flex items-center justify-center rounded-lg text-sm text-gray-500 hover:text-white transition-colors"
+                  >
+                    ↗
+                  </button>
+                )}
+              </div>
+            </div>
             <p className="text-sm text-gray-200 leading-relaxed selectable whitespace-pre-line">
               {chaptersData.summary}
             </p>

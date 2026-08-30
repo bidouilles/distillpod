@@ -3,7 +3,8 @@ import {
   type ReactNode, type RefObject,
 } from "react";
 import {
-  startPlay, getEpisode, audioStreamUrl, getProgress, putProgress, type Episode,
+  startPlay, getEpisode, audioStreamUrl, getProgress, putProgress,
+  getDownloadStatus, type Episode,
 } from "../api/client";
 import { useQueue } from "../stores/queueStore";
 
@@ -128,6 +129,7 @@ interface AudioContextValue {
   audioRef:          RefObject<HTMLAudioElement | null>;
   isPlaying:         boolean;
   currentTime:       number;
+  preparing:         string | null;
   duration:          number;
   audioReady:        boolean;
   loadEpisode:       (id: string, ep: PlayableEpisode | null, seekTo?: number) => Promise<void>;
@@ -153,6 +155,8 @@ export function AudioProvider({ children }: { children: ReactNode }) {
   const [episode,        setEpisode]        = useState<PlayableEpisode | null>(null);
   const [isPlaying,      setIsPlaying]      = useState(false);
   const [currentTime,    setCurrentTime]    = useState(0);
+  // Episode id whose audio is being fetched, so the UI can say so.
+  const [preparing,      setPreparing]      = useState<string | null>(null);
   const [duration,       setDuration]       = useState(0);
   const [audioReady,     setAudioReady]     = useState(false);
   const [playerExpanded, setPlayerExpanded] = useState(false);
@@ -282,6 +286,27 @@ export function AudioProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  /** Poll until the audio is on disk. Resolves false if it failed. */
+  const waitForDownload = useCallback(async (id: string): Promise<boolean> => {
+    setPreparing(id);
+    try {
+      // Generous: a long episode over a slow line takes a while, and the work
+      // continues server-side regardless of what this loop does.
+      for (let i = 0; i < 600; i++) {
+        try {
+          const s = await getDownloadStatus(id);
+          if (s.downloaded) return true;
+          if (s.error) return false;
+          if (!s.downloading) return false;   // nothing running and nothing on disk
+        } catch { /* transient — keep waiting */ }
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      return false;
+    } finally {
+      setPreparing(null);
+    }
+  }, []);
+
   const loadEpisode = useCallback(async (
     id: string,
     ep: PlayableEpisode | null,
@@ -308,8 +333,16 @@ export function AudioProvider({ children }: { children: ReactNode }) {
       resolved = { ...resolved, podcast_image: savedImage, podcast_title: savedTitle };
     }
 
-    // Ensure file is downloaded (startPlay is idempotent)
-    await startPlay(id, resolved.audio_url);
+    // Ask for the audio. The download runs server-side now, so this returns
+    // straight away and several episodes can be fetched at once; waiting here
+    // is only about this one being playable. The wait lives in the provider,
+    // which is mounted for the life of the app, so changing screen does not
+    // abandon it.
+    const started = await startPlay(id, resolved.audio_url);
+    if (started.status === "downloading") {
+      const ready = await waitForDownload(id);
+      if (!ready) return;          // failed — leave the player as it was
+    }
 
     // Swap src
     loadedIdRef.current = id;
@@ -366,7 +399,7 @@ export function AudioProvider({ children }: { children: ReactNode }) {
 
   return (
     <Ctx.Provider value={{
-      episode, audioRef, isPlaying, currentTime, duration, audioReady,
+      episode, audioRef, isPlaying, currentTime, duration, audioReady, preparing,
       loadEpisode, togglePlay, seek, skipBy, setRate,
       playerExpanded, setPlayerExpanded,
     }}>

@@ -12,8 +12,16 @@ from pathlib import Path
 
 router = APIRouter(prefix="/player", tags=["player"])
 
+import logging
+
+log = logging.getLogger(__name__)
+
 # In-memory set to avoid duplicate transcription jobs
 _transcribing: set[str] = set()
+
+# Downloads in flight, mapping episode id -> None while running, or the error
+# string if the last attempt failed. Absent means "not being downloaded".
+_downloading: dict[str, str | None] = {}
 
 
 def _safe_file_path(raw_path: str) -> Path:
@@ -48,36 +56,96 @@ async def play(req: PlayRequest):
         raise HTTPException(404, "Episode not found. Fetch episodes first.")
 
     local_path = Path(row["local_path"]) if row["local_path"] else None
+    ready = bool(row["downloaded"]) and local_path is not None and local_path.exists()
 
-    # Download if needed
-    if not row["downloaded"] or not (local_path and local_path.exists()):
-        local_path = await download_episode(req.episode_id, req.audio_url)
-        db = await get_db()
-        try:
-            await db.execute(
-                "UPDATE episodes SET downloaded = 1, local_path = ? WHERE id = ?",
-                (str(local_path), req.episode_id),
-            )
-            await db.commit()
-        finally:
-            await db.close()
-
-    # Start transcription in background if not already done/running
-    if row["transcript_status"] not in ("done", "processing") and req.episode_id not in _transcribing:
-        _transcribing.add(req.episode_id)
-
-        async def _bg_transcribe():
-            try:
-                await transcribe_episode(req.episode_id, local_path)
-            finally:
-                _transcribing.discard(req.episode_id)
-
-        asyncio.create_task(_bg_transcribe())
+    if not ready:
+        _start_download(req.episode_id, req.audio_url, row["transcript_status"])
+    elif row["transcript_status"] not in ("done", "processing"):
+        _start_transcription(req.episode_id, local_path)
 
     return {
         "episode_id": req.episode_id,
         "audio_url": f"/player/audio/{req.episode_id}",
         "transcript_status": row["transcript_status"],
+        # "downloading" means poll /player/download-status; "ready" means the
+        # audio can be requested now.
+        "status": "ready" if ready else "downloading",
+    }
+
+
+def _start_transcription(episode_id: str, local_path: Path) -> None:
+    if episode_id in _transcribing:
+        return
+    _transcribing.add(episode_id)
+
+    async def _run():
+        try:
+            await transcribe_episode(episode_id, local_path)
+        finally:
+            _transcribing.discard(episode_id)
+
+    asyncio.create_task(_run())
+
+
+def _start_download(episode_id: str, audio_url: str, transcript_status: str) -> None:
+    """Fetch the audio in the background.
+
+    Awaiting the download inside /play held the request open for as long as it
+    took, which meant the play button sat spinning, leaving the screen lost the
+    work, and two episodes could not be fetched at once. Now the request
+    returns immediately and the client polls, so several can download in
+    parallel and none of them depend on a screen staying open.
+    """
+    if episode_id in _downloading:
+        return
+    _downloading[episode_id] = None          # in flight, no error
+
+    async def _run():
+        try:
+            path = await download_episode(episode_id, audio_url)
+            db = await get_db()
+            try:
+                await db.execute(
+                    "UPDATE episodes SET downloaded = 1, local_path = ? WHERE id = ?",
+                    (str(path), episode_id),
+                )
+                await db.commit()
+            finally:
+                await db.close()
+            _downloading.pop(episode_id, None)
+            if transcript_status not in ("done", "processing"):
+                _start_transcription(episode_id, path)
+        except Exception as exc:
+            log.warning("download failed for %s: %s", episode_id, exc)
+            _downloading[episode_id] = str(exc)
+
+    asyncio.create_task(_run())
+
+
+@router.get("/download-status/{episode_id}")
+async def download_status(episode_id: str):
+    """Whether an episode's audio is on disk yet.
+
+    Server-side, so it survives leaving the screen: come back and the download
+    is either still going or already finished.
+    """
+    error = _downloading.get(episode_id, ...)
+    db = await get_db()
+    try:
+        row = await db.execute_fetchone(
+            "SELECT downloaded, local_path FROM episodes WHERE id = ?", (episode_id,)
+        )
+    finally:
+        await db.close()
+    if not row:
+        raise HTTPException(404, "Episode not found")
+
+    on_disk = bool(row["downloaded"]) and bool(row["local_path"]) and Path(row["local_path"]).exists()
+    return {
+        "episode_id": episode_id,
+        "downloaded": on_disk,
+        "downloading": error is None,        # present in the map with no error
+        "error": error if isinstance(error, str) else None,
     }
 
 
