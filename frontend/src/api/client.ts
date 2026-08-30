@@ -276,3 +276,21 @@ export const deleteProgress = (episodeId: string) =>
  *  Returns immediately; poll listGists to see them arrive. */
 export const autoSnipEpisode = (episodeId: string) =>
   req<{ episode_id: string; status: string }>("POST", `/gists/auto/${episodeId}`);
+
+// --- Obsidian export ---
+export interface ExportedNote {
+  episode_id: string;
+  title: string;
+  /** false when the model half was skipped or unavailable — the note is still usable. */
+  enriched: boolean;
+  markdown: string;
+}
+
+export const exportNote = (episodeId: string, enrich = true) =>
+  req<ExportedNote>("GET", `/player/export/${episodeId}?enrich=${enrich}`);
+
+/** What an episode is about, generated on first open and stored after. */
+export const getBrief = (episodeId: string) =>
+  req<{ episode_id: string; summary: string | null; generated: boolean }>(
+    "GET", `/player/brief/${episodeId}`
+  );

@@ -54,6 +54,15 @@ CREATE TABLE IF NOT EXISTS playback (
     updated_at  TEXT NOT NULL
 );
 
+-- The model-written half of an episode's export note: key points, the things
+-- it mentioned, and the argument map. Cached because it costs a model call
+-- over a whole transcript and never changes once the transcript is final.
+CREATE TABLE IF NOT EXISTS episode_notes (
+    episode_id  TEXT PRIMARY KEY,
+    extras_json TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS suggestions (
     id                TEXT PRIMARY KEY,
     podcast_index_id  TEXT,

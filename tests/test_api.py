@@ -438,3 +438,36 @@ class TestProgress:
         entries = (await client.get("/player/progress")).json()
         ghost = next(e for e in entries if e["episode_id"] == "ghost_episode")
         assert ghost["title"] is None
+
+
+class TestBriefEndpoint:
+
+    async def test_an_existing_summary_is_returned_without_spending_a_call(self, client, tmp_db):
+        seed_timed_transcript(tmp_db)
+        conn = sqlite3.connect(tmp_db)
+        conn.execute("UPDATE episodes SET summary = ? WHERE id = ?", ("Already written.", TIMED_EPISODE_ID))
+        conn.commit(); conn.close()
+
+        with patch("services.note_builder.brief") as build:
+            r = await client.get(f"/player/brief/{TIMED_EPISODE_ID}")
+        assert r.json()["summary"] == "Already written."
+        assert r.json()["generated"] is False
+        assert not build.called
+
+    async def test_a_summary_is_generated_and_stored_once(self, client, tmp_db):
+        seed_timed_transcript(tmp_db)
+        with patch("services.note_builder.brief", return_value="What it is about.") as build:
+            first = await client.get(f"/player/brief/{TIMED_EPISODE_ID}")
+            second = await client.get(f"/player/brief/{TIMED_EPISODE_ID}")
+        assert first.json() == {"episode_id": TIMED_EPISODE_ID, "summary": "What it is about.", "generated": True}
+        assert second.json()["generated"] is False      # served from the row
+        assert build.call_count == 1
+
+    async def test_an_untranscribed_episode_asks_for_nothing(self, client):
+        with patch("services.note_builder.brief") as build:
+            r = await client.get(f"/player/brief/{EPISODE_ID_1}")
+        assert r.status_code == 200 and r.json()["summary"] is None
+        assert not build.called
+
+    async def test_an_unknown_episode_is_a_404(self, client):
+        assert (await client.get("/player/brief/nope")).status_code == 404
