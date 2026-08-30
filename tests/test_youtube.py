@@ -597,3 +597,116 @@ class TestIngest:
         assert not stt_run.called
         eps = await _rows(tmp_db, "SELECT transcript_status FROM episodes WHERE id = ?", (EPISODE_ID,))
         assert eps[0]["transcript_status"] == "error"
+
+
+# ── Channel subscriptions ─────────────────────────────────────────────────────
+
+class TestChannelUrls:
+
+    @pytest.mark.parametrize("url", [
+        "https://www.youtube.com/@LowLevelTV",
+        "https://www.youtube.com/@NetworkChuck/videos",
+        "https://www.youtube.com/@someone/streams",
+        "https://youtube.com/channel/UC6biysICWOJ-C3P4Tyeggzg",
+        "https://www.youtube.com/channel/UC6biysICWOJ-C3P4Tyeggzg/videos",
+        "https://www.youtube.com/c/SomeChannel",
+        "https://www.youtube.com/user/SomeUser",
+    ])
+    def test_channel_urls_are_recognised(self, url):
+        assert youtube.is_channel_url(url)
+
+    @pytest.mark.parametrize("url", [
+        "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+        "https://youtu.be/jNQXAC9IVRw",
+        "https://www.youtube.com/shorts/jNQXAC9IVRw",
+        "https://example.com/@someone",
+        "",
+    ])
+    def test_a_video_is_not_a_channel(self, url):
+        assert not youtube.is_channel_url(url)
+
+    def test_the_listing_url_is_the_videos_tab(self):
+        """Not the Atom feed: the tab is what excludes Shorts and streams."""
+        url = youtube.channel_videos_url("UC6biysICWOJ-C3P4Tyeggzg")
+        assert url.endswith("/videos")
+        assert "UC6biysICWOJ-C3P4Tyeggzg" in url
+
+
+def _entry(vid, duration=600, live=None, ts=1788000000, title="A video"):
+    return {"id": vid, "title": title, "duration": duration,
+            "live_status": live, "timestamp": ts,
+            "url": f"https://www.youtube.com/watch?v={vid}"}
+
+
+def _listing(entries):
+    proc = MagicMock(stdout=json.dumps({"entries": entries}))
+    return patch.object(youtube, "_run", return_value=proc)
+
+
+class TestChannelListing:
+
+    def test_regular_videos_come_through(self):
+        with _listing([_entry("aaaaaaaaaaa"), _entry("bbbbbbbbbbb")]):
+            vids = youtube._channel_videos_blocking("UC123", 15)
+        assert [v["video_id"] for v in vids] == ["aaaaaaaaaaa", "bbbbbbbbbbb"]
+        assert vids[0]["duration_seconds"] == 600
+        assert vids[0]["published_at"] is not None
+
+    def test_shorts_are_left_out(self):
+        """The tab excludes them structurally; this is the backstop."""
+        with _listing([_entry("shortshort", duration=45), _entry("longlonglon")]):
+            vids = youtube._channel_videos_blocking("UC123", 15)
+        assert [v["video_id"] for v in vids] == ["longlonglon"]
+
+    @pytest.mark.parametrize("status", ["is_live", "is_upcoming", "was_live", "post_live"])
+    def test_streams_are_left_out(self, status):
+        with _listing([_entry("streamvideo", live=status), _entry("normalvideo")]):
+            vids = youtube._channel_videos_blocking("UC123", 15)
+        assert [v["video_id"] for v in vids] == ["normalvideo"]
+
+    def test_an_entry_with_no_duration_is_skipped(self):
+        """Usually a stream placeholder rather than something to listen to."""
+        with _listing([_entry("nodurationx", duration=None), _entry("hasduration")]):
+            vids = youtube._channel_videos_blocking("UC123", 15)
+        assert [v["video_id"] for v in vids] == ["hasduration"]
+
+    def test_a_missing_upload_date_is_not_fatal(self):
+        """yt-dlp returns a null timestamp for some channels; verified live."""
+        with _listing([_entry("notimestamp", ts=None)]):
+            vids = youtube._channel_videos_blocking("UC123", 15)
+        assert len(vids) == 1 and vids[0]["published_at"] is None
+
+    def test_an_empty_channel(self):
+        with _listing([]):
+            assert youtube._channel_videos_blocking("UC123", 15) == []
+
+
+class TestChannelIdentity:
+
+    def test_a_feed_import_and_a_manual_add_are_the_same_episode(self):
+        """Otherwise subscribing would duplicate every video already added."""
+        from services import youtube_library
+        from routers.youtube import _episode_id
+        assert youtube_library.episode_id_for("uQV6hYwyjMY") == _episode_id("uQV6hYwyjMY")
+
+    def test_the_channel_subscription_id_matches_the_one_videos_create(self):
+        from services import youtube_library
+        from routers.youtube import _podcast_id
+        channel_id = "UC6biysICWOJ-C3P4Tyeggzg"
+        assert youtube_library.podcast_id_for(channel_id) == _podcast_id({"channel_id": channel_id})
+
+    def test_a_channel_that_cannot_be_resolved_is_an_error(self):
+        proc = MagicMock(stdout=json.dumps({"title": "Something", "entries": []}))
+        with patch.object(youtube, "_run", return_value=proc):
+            with pytest.raises(youtube.YouTubeError, match="which channel"):
+                youtube._resolve_channel_blocking("https://www.youtube.com/@mystery")
+
+    def test_a_channel_id_is_recovered_from_the_url_when_absent(self):
+        proc = MagicMock(stdout=json.dumps({
+            "title": "Low Level",
+            "channel_url": "https://www.youtube.com/channel/UC6biysICWOJ-C3P4Tyeggzg",
+        }))
+        with patch.object(youtube, "_run", return_value=proc):
+            ch = youtube._resolve_channel_blocking("https://www.youtube.com/@LowLevelTV")
+        assert ch["channel_id"] == "UC6biysICWOJ-C3P4Tyeggzg"
+        assert ch["title"] == "Low Level"

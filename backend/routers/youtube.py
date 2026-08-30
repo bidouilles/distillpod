@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 from database import get_db
 from ids import safe_episode_id
-from services import youtube
+from services import youtube, youtube_library
 from services.downloader import download_episode
 from services.transcriber import store_transcript, transcribe_episode
 
@@ -123,12 +123,46 @@ def _start_ingest(episode_id: str, meta: dict) -> None:
     asyncio.create_task(_run())
 
 
+# One channel import at a time, however many times subscribe is pressed.
+_importing: set[str] = set()
+
+
+def _start_channel_import(channel_id: str) -> None:
+    if channel_id in _importing:
+        return
+    _importing.add(channel_id)
+
+    async def _run():
+        try:
+            stats = await youtube_library.sync_channel(channel_id)
+            log.info("channel %s: %s", channel_id, stats)
+        except Exception:
+            log.exception("channel import failed for %s", channel_id)
+        finally:
+            _importing.discard(channel_id)
+
+    asyncio.create_task(_run())
+
+
 @router.post("/add")
 async def add_video(req: AddVideoRequest):
-    """Ingest one video. Idempotent: re-adding returns the existing episode."""
+    """Ingest one video, or subscribe to a channel.
+
+    One box takes both, because from the outside they are the same gesture:
+    "follow this". A channel URL subscribes and starts importing its recent
+    long-form uploads in the background; a video URL ingests that one video.
+    """
+    if youtube.is_channel_url(req.url):
+        try:
+            channel = await youtube_library.subscribe(req.url)
+        except youtube.YouTubeError as exc:
+            raise HTTPException(502, str(exc))
+        _start_channel_import(channel["channel_id"])
+        return {"kind": "channel", **channel, "already_added": False}
+
     video_id = youtube.video_id(req.url)
     if not video_id:
-        raise HTTPException(400, "Not a YouTube video URL")
+        raise HTTPException(400, "Not a YouTube video or channel URL")
 
     episode_id = _episode_id(video_id)
 
@@ -143,6 +177,7 @@ async def add_video(req: AddVideoRequest):
 
     if existing and existing["transcript_status"] in ("processing", "done"):
         return {
+            "kind": "video",
             "episode_id": existing["id"],
             "podcast_id": existing["podcast_id"],
             "title": existing["title"],
@@ -214,6 +249,7 @@ async def add_video(req: AddVideoRequest):
     _start_ingest(episode_id, meta)
 
     return {
+        "kind": "video",
         "episode_id": episode_id,
         "podcast_id": podcast_id,
         "title": title,

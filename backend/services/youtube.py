@@ -100,6 +100,164 @@ def _run(args: list[str], timeout: int) -> subprocess.CompletedProcess:
         raise YouTubeError("yt-dlp failed: " + " / ".join(tail)) from exc
 
 
+# /@handle, /channel/UC…, /c/name, /user/name — with or without a trailing
+# tab like /videos, /shorts or /streams.
+_CHANNEL_PATH = re.compile(r"^/(?:@[^/]+|channel/[^/]+|c/[^/]+|user/[^/]+)(?:/|$)", re.I)
+_CHANNEL_ID = re.compile(r"/channel/(UC[A-Za-z0-9_-]{20,})", re.I)
+
+# Anything shorter than this is a clip rather than something to listen to. The
+# /videos tab already excludes Shorts structurally, so this is only a backstop.
+MIN_VIDEO_SECONDS = 120
+
+# Live and upcoming streams are not the thing being subscribed to, and a
+# finished stream is usually hours of unedited talk.
+_LIVE_STATUSES = {"is_live", "is_upcoming", "post_live", "was_live"}
+
+
+def is_channel_url(url: str) -> bool:
+    """A channel or handle URL, as opposed to a single video."""
+    if not is_youtube_url(url) or video_id(url):
+        return False
+    m = re.match(r"^https?://[^/]+(/[^?#]*)", url.strip())
+    return bool(m) and bool(_CHANNEL_PATH.match(m.group(1)))
+
+
+def channel_videos_url(channel_id: str) -> str:
+    """The channel's long-form uploads.
+
+    Deliberately the /videos tab rather than the channel's Atom feed. The tab
+    excludes Shorts and live streams by construction, and yt-dlp returns a
+    duration and a live status for each entry, neither of which the feed
+    carries. (The feed also 404s for any non-browser User-Agent, and the
+    UULF/UUSH derived-playlist feeds 404 outright.)
+    """
+    return f"https://www.youtube.com/channel/{channel_id}/videos"
+
+
+def _resolve_channel_blocking(url: str) -> dict:
+    """Channel id, name and avatar for a channel or @handle URL.
+
+    `--playlist-items 1` because only the channel's own metadata is wanted;
+    enumerating a large channel here would be slow and is what the listing is for.
+    """
+    out = _run(
+        ["-J", "--flat-playlist", "--playlist-items", "1", "--no-warnings", url],
+        METADATA_TIMEOUT,
+    )
+    try:
+        meta = json.loads(out.stdout)
+    except ValueError as exc:
+        raise YouTubeError("yt-dlp returned no usable channel metadata") from exc
+
+    channel_id = meta.get("channel_id") or ""
+    if not channel_id:
+        m = _CHANNEL_ID.search(meta.get("channel_url") or meta.get("webpage_url") or "")
+        channel_id = m.group(1) if m else ""
+    if not channel_id:
+        raise YouTubeError("Could not work out which channel that URL points to")
+
+    thumbs = meta.get("thumbnails") or []
+    return {
+        "channel_id": channel_id,
+        "title": meta.get("channel") or meta.get("uploader") or meta.get("title") or "YouTube channel",
+        "thumbnail": (thumbs[-1].get("url") if thumbs else None),
+    }
+
+
+async def resolve_channel(url: str) -> dict:
+    return await asyncio.to_thread(_resolve_channel_blocking, url)
+
+
+def _channel_videos_blocking(channel_id: str, limit: int) -> list[dict]:
+    out = _run(
+        ["-J", "--flat-playlist", "--playlist-items", f"1-{limit}", "--no-warnings",
+         channel_videos_url(channel_id)],
+        METADATA_TIMEOUT,
+    )
+    try:
+        data = json.loads(out.stdout)
+    except ValueError as exc:
+        raise YouTubeError("yt-dlp returned no usable channel listing") from exc
+
+    videos = []
+    for entry in data.get("entries") or []:
+        vid = entry.get("id")
+        if not vid:
+            continue
+        if (entry.get("live_status") or "") in _LIVE_STATUSES:
+            continue
+        duration = entry.get("duration")
+        # No duration means yt-dlp could not tell — usually a stream placeholder.
+        if not duration or duration < MIN_VIDEO_SECONDS:
+            continue
+        ts = entry.get("timestamp") or entry.get("release_timestamp")
+        videos.append({
+            "video_id": vid,
+            "title": entry.get("title") or "Untitled video",
+            "url": entry.get("url") or watch_url(vid),
+            "duration_seconds": int(duration),
+            "published_at": datetime.fromtimestamp(ts, tz=timezone.utc) if ts else None,
+            "thumbnail": f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg",
+        })
+    return videos
+
+
+# The Atom feed 404s for a non-browser User-Agent — curl's default and httpx's
+# both get an error page rather than the document. Verified against a live feed.
+FEED_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+
+
+def channel_feed_url(channel_id: str) -> str:
+    return f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+
+
+async def _feed_dates(channel_id: str) -> dict[str, datetime]:
+    """Publish dates for the channel's recent uploads, keyed by video id.
+
+    The /videos listing returns a null timestamp for some channels, and the
+    obvious fix — asking yt-dlp for each video's metadata — is what tripped
+    YouTube's bot check hard enough to get the address refused for a while.
+    This is one cheap request for the whole channel instead.
+    """
+    import feedparser
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
+            r = await client.get(channel_feed_url(channel_id),
+                                 headers={"User-Agent": FEED_USER_AGENT})
+            r.raise_for_status()
+            body = r.text
+    except Exception as exc:
+        log.info("channel feed unavailable for %s: %s", channel_id, exc)
+        return {}
+
+    dates: dict[str, datetime] = {}
+    for entry in feedparser.parse(body).entries:
+        vid = entry.get("yt_videoid")
+        if vid and entry.get("published_parsed"):
+            dates[vid] = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+    return dates
+
+
+async def fetch_channel_videos(channel_id: str, limit: int = 15) -> list[dict]:
+    """Recent long-form uploads, newest first. Shorts and streams excluded.
+
+    Two requests for the whole channel and none per video: the /videos tab
+    decides what counts and how long it runs, the Atom feed supplies the
+    publish dates the tab omits.
+    """
+    videos = await asyncio.to_thread(_channel_videos_blocking, channel_id, limit)
+    if not videos:
+        return []
+    dates = await _feed_dates(channel_id)
+    for v in videos:
+        v["published_at"] = dates.get(v["video_id"]) or v["published_at"]
+    return videos
+
+
 # ── Metadata ─────────────────────────────────────────────────────────────────
 
 def _fetch_metadata_blocking(url: str) -> dict:

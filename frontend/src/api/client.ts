@@ -215,8 +215,11 @@ export const getChapters = (episodeId: string) =>
 // A video is ingested as an ordinary episode, so nothing else in the client
 // needs to know it came from YouTube.
 export interface YouTubeAddResult {
-  episode_id: string;
+  /** "video" ingests one episode; "channel" subscribes and imports in the background. */
+  kind: "video" | "channel";
+  episode_id?: string;
   podcast_id: string;
+  channel_id?: string;
   title: string;
   channel?: string;
   image_url?: string;
