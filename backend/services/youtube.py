@@ -466,30 +466,44 @@ def _fetch_json3_via_ytdlp(url: str, lang: str) -> Optional[dict]:
 
 
 async def fetch_caption_words(meta: dict) -> list[dict]:
-    """Word-level transcript from YouTube's own captions. [] when there are none."""
+    """Word-level transcript from YouTube's own captions.
+
+    Returns [] only when the video genuinely has no usable caption track.
+    Raises YouTubeError when a track exists but could not be fetched, which is
+    a different thing entirely and must not be mistaken for absence: YouTube
+    answers a rate-limited caption request with 429, and reporting that as "no
+    captions" marks the episode handled, hides the throttling from any circuit
+    breaker, and loses the transcript for good. Seen for real — a backfill
+    recorded 62 of 74 episodes as caption-less while every one of them had 157
+    caption tracks.
+    """
     track = caption_track(meta)
     if not track:
         return []
     lang, url = track
 
     payload: Optional[dict] = None
+    first_error: Optional[str] = None
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=CAPTION_TIMEOUT) as client:
             r = await client.get(url)
             r.raise_for_status()
             payload = r.json()
     except Exception as exc:
+        first_error = str(exc)
         log.info("caption URL fetch failed (%s), retrying via yt-dlp", exc)
         try:
             payload = await asyncio.to_thread(
                 _fetch_json3_via_ytdlp, meta.get("webpage_url") or "", lang
             )
         except YouTubeError as exc:
-            log.info("yt-dlp caption fallback failed: %s", exc)
-            return []
+            raise YouTubeError(
+                f"caption track {lang} exists but could not be fetched "
+                f"({first_error}; yt-dlp fallback: {exc})"
+            ) from exc
 
     if not payload:
-        return []
+        raise YouTubeError(f"caption track {lang} exists but returned nothing")
     return _words_from_json3(payload, meta.get("duration"))
 
 

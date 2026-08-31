@@ -778,3 +778,80 @@ class TestListingDates:
         with patch.object(youtube, "_run", return_value=proc):
             vids = youtube._channel_videos_blocking("UC123", 15)
         assert vids[0]["published_at"].year == 2026
+
+
+@pytest.mark.asyncio
+class TestCaptionFetchFailures:
+    """A refused fetch and an absent track look identical unless kept apart.
+
+    YouTube answers a rate-limited caption request with 429. Reporting that as
+    "no captions" marks the episode handled, hides the throttling from any
+    circuit breaker, and loses the transcript. A real backfill recorded 62 of
+    74 episodes as caption-less while every one of them had captions.
+    """
+
+    META = {
+        "language": "en",
+        "webpage_url": "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+        "automatic_captions": {"en-orig": [{"ext": "json3", "url": "https://cap.test/x"}]},
+    }
+
+    async def test_no_track_at_all_is_an_empty_result(self):
+        assert await youtube.fetch_caption_words({"language": "en"}) == []
+
+    async def test_a_refused_fetch_raises_rather_than_reporting_no_captions(self):
+        import httpx as _httpx
+
+        class Boom:
+            def __init__(self, **kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def get(self, url):
+                return _httpx.Response(429, text="Sorry...",
+                                       request=_httpx.Request("GET", url))
+
+        with patch("services.youtube.httpx.AsyncClient", Boom), \
+             patch.object(youtube, "_fetch_json3_via_ytdlp",
+                          side_effect=youtube.YouTubeError("also refused")):
+            with pytest.raises(youtube.YouTubeError, match="could not be fetched"):
+                await youtube.fetch_caption_words(self.META)
+
+    async def test_an_empty_payload_for_an_existing_track_also_raises(self):
+        class Empty:
+            def __init__(self, **kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def get(self, url):
+                import httpx as h
+                return h.Response(200, json={}, request=h.Request("GET", url))
+
+        with patch("services.youtube.httpx.AsyncClient", Empty):
+            with pytest.raises(youtube.YouTubeError):
+                await youtube.fetch_caption_words({**self.META,
+                                                   "automatic_captions": {"en-orig": []}, 
+                                                   "subtitles": {"en": [{"ext": "json3", "url": "u"}]}})
+
+    async def test_the_backfill_stops_once_refusals_pile_up(self, client, tmp_db):
+        """With refusals now surfacing, the circuit breaker actually trips —
+        it could not before, because they were counted as successes."""
+        import sqlite3
+        from services import backfill
+        conn = sqlite3.connect(tmp_db)
+        conn.execute("INSERT OR IGNORE INTO subscriptions (podcast_id, feed_url, title,"
+                     " subscribed_at, source) VALUES ('yt-UCy','u','C','2026-01-01','youtube_channel')")
+        for i in range(12):
+            conn.execute("INSERT OR REPLACE INTO episodes (id, podcast_id, title, audio_url,"
+                         " transcript_status, published_at) VALUES (?,'yt-UCy',?,?, 'none','2026-08-01')",
+                         (f"yt-r{i:02}", f"E{i}", f"https://youtu.be/r{i:02}"))
+        conn.commit(); conn.close()
+
+        with patch.object(youtube, "fetch_metadata", AsyncMock(return_value=self.META)), \
+             patch.object(youtube, "fetch_caption_words",
+                          AsyncMock(side_effect=youtube.YouTubeError("429"))), \
+             patch.object(backfill, "REQUEST_SPACING_SECONDS", 0):
+            await backfill.run()
+
+        s = backfill.status()
+        assert s["stopped_early"] is True
+        assert s["failed"] == backfill.CONSECUTIVE_FAILURE_LIMIT
+        assert s["no_captions"] == 0          # refusals are not absences
