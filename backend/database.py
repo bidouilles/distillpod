@@ -172,6 +172,7 @@ async def init_db():
             'ALTER TABLE episodes ADD COLUMN ads_detected INTEGER',
             'ALTER TABLE episodes ADD COLUMN summary TEXT',
             'ALTER TABLE episodes ADD COLUMN chapters_status TEXT DEFAULT \'none\'',
+            'ALTER TABLE gists ADD COLUMN auto INTEGER DEFAULT 0',
         ]:
             try:
                 await db.execute(alter)

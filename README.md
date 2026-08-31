@@ -132,6 +132,7 @@ subscription either way.
 - **🔍 Search** — find podcasts via the iTunes Search API (no key needed). When the search box is empty, a **🤖 Suggested for you** section surfaces daily AI-generated recommendations based on your listening history.
 - **📚 Library** — browse your subscribed podcasts and their episode lists with transcript status badges.
 - **▶️ Fullscreen Player** — Spotify-style slide-up player with chapter navigation, ad-free toggle, and distillation controls.
+- **⚙️ Auto-snips** — the nightly job picks the handful of moments per new episode that would have been worth tapping, and saves them as distills, badged so you know they were suggested rather than chosen. Also available on demand from any transcribed episode via **⚙ Suggest highlights**, which is the only route for YouTube videos and anything older than the job's window. Measured at ~13s for a 12-minute episode.
 - **⚗️ Distill** — tap at any moment while listening. Captures the last 60 seconds of transcript, calls the agent CLI, and returns a verbatim quote and a 1–2 sentence insight (~30s).
 - **✂️ Ad-free audio** — after transcription, the model classifies ad segments and ffmpeg cuts them out. Stream the clean version from the player.
 - **📖 Chapters** — the model generates 4–10 named chapters with timestamps from the full transcript. Tap any chapter to jump directly.

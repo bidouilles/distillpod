@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useParams, useLocation, useNavigate } from "react-router-dom";
 import {
-  getEpisode, getChapters, listGists, createGist,
+  getEpisode, getChapters, listGists, createGist, autoSnipEpisode,
   type Gist, type ChaptersResult,
   type Episode,
 } from "../api/client";
@@ -177,6 +177,8 @@ export default function Player() {
   const [episodeInfo, setEpisodeInfo] = useState<PlayableEpisode | null>(routeState || null);
   const [chaptersData, setChaptersData] = useState<ChaptersResult | null>(null);
   const [gists, setGists]             = useState<Gist[]>([]);
+  const [snipping, setSnipping]       = useState(false);
+  const snipPoll                      = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const [chaptersOpen, setChaptersOpen] = useState(false);
   const [queueFeedback, setQueueFeedback] = useState<"next" | "end" | null>(null);
   const [loading, setLoading]         = useState(false);
@@ -212,6 +214,35 @@ export default function Player() {
     getChapters(episodeId).then(setChaptersData).catch(() => {});
     listGists(episodeId).then(setGists).catch(() => {});
   }, [episodeId]);
+
+  useEffect(() => () => { if (snipPoll.current) clearInterval(snipPoll.current); }, []);
+
+  const suggestHighlights = async () => {
+    if (!episodeId || snipping) return;
+    setSnipping(true);
+    const before = gists.length;
+    try {
+      await autoSnipEpisode(episodeId);
+    } catch {
+      setSnipping(false);
+      return;
+    }
+    // A model call over a full transcript takes a while and has no status of
+    // its own, so new distills appearing is the completion signal. Give up
+    // after ~3 minutes rather than polling forever.
+    let tries = 0;
+    snipPoll.current = setInterval(async () => {
+      tries += 1;
+      try {
+        const list = await listGists(episodeId);
+        setGists(list);
+        if (list.length > before || tries >= 36) {
+          if (snipPoll.current) clearInterval(snipPoll.current);
+          setSnipping(false);
+        }
+      } catch { /* transient — keep polling */ }
+    }, 5000);
+  };
 
   // ── Refresh gists when fullscreen player closes (user may have distilled) ─
   useEffect(() => {
@@ -576,8 +607,23 @@ export default function Player() {
           </div>
         )}
 
+        {/* Let the model find the moments, for anything the nightly job does
+            not reach — YouTube videos and older episodes both miss it. */}
+        {displayEpisode?.transcript_status === "done" && (
+          <button
+            onClick={suggestHighlights}
+            disabled={snipping}
+            className="w-full min-h-[44px] rounded-xl bg-gray-800 hover:bg-gray-700 disabled:opacity-60 text-sm text-gray-200 font-medium transition-colors flex items-center justify-center gap-2"
+          >
+            {snipping
+              ? <><span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin inline-block" />
+                  Finding highlights…</>
+              : <>⚙ Suggest highlights</>}
+          </button>
+        )}
+
         {/* Empty distills nudge */}
-        {gists.length === 0 && isThisEpisode && (
+        {gists.length === 0 && isThisEpisode && !snipping && (
           <div className="text-center py-4 text-gray-600 text-xs">
             Open the player and tap ⚗️ to distill moments from this episode
           </div>

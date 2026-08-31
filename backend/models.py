@@ -73,6 +73,9 @@ class Gist(BaseModel):
     text: str                     # extracted from transcript
     summary: Optional[str] = None  # Claude summary (optional, via CLI subprocess)
     created_at: datetime
+    # Picked by the nightly job rather than tapped while listening. Shown as
+    # such, because a suggestion the user never made deserves to say so.
+    auto: bool = False
 
 
 # Request / Response schemas

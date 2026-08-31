@@ -199,5 +199,17 @@ scripts/
   Machine-translated caption tracks are deliberately never selected.
 - Every transcript write goes through `transcriber.store_transcript`, whichever
   backend produced it, so the FTS index cannot be forgotten.
+- `services/auto_snipper.py` picks highlights from a finished transcript. The
+  timestamps come back from the model, so none of them are trusted: each is
+  clamped into the episode's duration, snapped to real transcript words, and
+  dropped if it lands within half a window of one already taken. The stored
+  `text` is always the real excerpt, never the model's quote — the quote goes
+  in `summary` alongside the insight, in the same shape manual distills use, so
+  the UI renders both identically.
+- Auto-snips are capped in the nightly job (`MAX_AUTO_SNIP_EPISODES`) and
+  scoped by recency, unlike chapterization: each one is a model call over a
+  full transcript, so an unscoped query would take on the whole back catalogue
+  the first night. `POST /gists/auto/{episode_id}` is the on-demand route, and
+  the only one that reaches YouTube videos — the sync skips `yt-` feeds.
 - Background tasks (transcription, research) run via `asyncio.create_task` -- they do not survive restarts.
 - Git remote: `upstream` -> `https://github.com/andrepaim/distillpod.git` (fork of andrepaim/distillpod).

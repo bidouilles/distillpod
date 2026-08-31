@@ -1,9 +1,18 @@
+import asyncio
+import logging
+
 from fastapi import APIRouter, HTTPException
 from database import get_db
 from models import Gist, GistRequest
 from services.snip_engine import create_gist
 
+log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/gists", tags=["gists"])
+
+# One auto-snip run per episode, however many times the button is pressed —
+# each is a model call over a whole transcript.
+_snipping: set[str] = set()
 
 
 @router.post("/")
@@ -50,6 +59,77 @@ async def make_gist(req: GistRequest) -> Gist:
     await db.commit()
     await db.close()
     return shot
+
+
+@router.post("/auto/{episode_id}")
+async def auto_snip_episode(episode_id: str):
+    """Pick the moments worth keeping from an already-transcribed episode.
+
+    The nightly job does this for new podcast episodes. This is the same thing
+    on demand, which is the only route for anything the job does not reach:
+    YouTube videos (their pseudo-subscriptions are skipped by the sync) and
+    anything older than the job's recency window.
+
+    Returns immediately. The work is a model call over a full transcript, so
+    the client polls the gist list rather than holding a request open.
+    """
+    db = await get_db()
+    try:
+        row = await db.execute_fetchone(
+            """SELECT e.id, e.title, e.podcast_id, e.transcript_status,
+                      s.title AS podcast_title
+               FROM episodes e
+               LEFT JOIN subscriptions s ON s.podcast_id = e.podcast_id
+               WHERE e.id = ?""",
+            (episode_id,),
+        )
+        if not row:
+            raise HTTPException(404, "Episode not found")
+        if row["transcript_status"] != "done":
+            raise HTTPException(409, "Episode is not transcribed yet")
+        transcript = await db.execute_fetchone(
+            "SELECT words_json FROM transcripts WHERE episode_id = ?", (episode_id,)
+        )
+        if not transcript:
+            raise HTTPException(409, "Episode is not transcribed yet")
+        meta = (row["podcast_id"], row["title"], row["podcast_title"] or "")
+        words_json = transcript["words_json"]
+    finally:
+        await db.close()
+
+    if episode_id in _snipping:
+        return {"episode_id": episode_id, "status": "already_running"}
+    _snipping.add(episode_id)
+
+    async def _run():
+        try:
+            from services.auto_snipper import pick_snips, build_rows
+            loop = asyncio.get_event_loop()
+            snips = await loop.run_in_executor(None, pick_snips, words_json)
+            if not snips:
+                return
+            podcast_id, episode_title, podcast_title = meta
+            rows = build_rows(snips, episode_id, podcast_id, episode_title, podcast_title)
+            inner = await get_db()
+            try:
+                await inner.executemany(
+                    """INSERT INTO gists
+                       (id, episode_id, podcast_id, episode_title, podcast_title,
+                        start_seconds, end_seconds, text, summary, created_at, auto)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    rows,
+                )
+                await inner.commit()
+            finally:
+                await inner.close()
+            log.info("%s: %d auto-snip(s)", episode_id, len(rows))
+        except Exception:
+            log.exception("auto-snip failed for %s", episode_id)
+        finally:
+            _snipping.discard(episode_id)
+
+    asyncio.create_task(_run())
+    return {"episode_id": episode_id, "status": "started"}
 
 
 @router.get("/")
