@@ -42,11 +42,41 @@ def fts_query(q: str) -> str:
     return " ".join(f'"{t}"' for t in tokens)
 
 
-def find_matches(words_json: str, q: str, max_snippets: int = 3) -> tuple[int, list[dict]]:
+# Prefix matching on a token this short matches most of the library, so a short
+# token only survives when it is the whole query.
+MIN_PREFIX_TOKEN = 3
+
+
+def fts_any_query(q: str) -> str:
+    """A MATCH expression that finds documents with ANY of these words.
+
+    `fts_query` ANDs its tokens, which is right when someone types words into a
+    search box: two words mean both. It is wrong for retrieval, where the words
+    come from a model guessing at what a speaker might have said. "model evals"
+    found nothing in an episode that says "models" and "evals" — the singular
+    was absent and the AND failed on it.
+
+    So this ORs the tokens and matches them as prefixes, letting bm25 rank the
+    documents that cover more of them. Recall matters more than precision here,
+    because what comes back is then ranked again by how many separate searches
+    agree on the same passage.
+    """
+    tokens = [t.replace('"', '""') for t in re.split(r"\s+", q.strip()) if t]
+    long_enough = [t for t in tokens if len(t) >= MIN_PREFIX_TOKEN]
+    chosen = long_enough or tokens
+    return " OR ".join(f'"{t}"*' for t in chosen)
+
+
+def find_matches(words_json: str, q: str, max_snippets: int = 3,
+                 radius: int = SNIPPET_RADIUS) -> tuple[int, list[dict]]:
     """Locate `q` inside one transcript.
 
     Returns (total hits, up to `max_snippets` snippets), each snippet carrying
     the timestamp of its first matching word so the player can seek there.
+
+    `radius` is how many words of context surround a hit. The search screen
+    wants a line someone can scan; a model answering a question needs enough
+    either side to see what was actually being said, so it asks for more.
     """
     terms = query_terms(q)
     if not terms:
@@ -88,8 +118,8 @@ def find_matches(words_json: str, q: str, max_snippets: int = 3) -> tuple[int, l
 
     snippets = []
     for cluster in clusters[:max_snippets]:
-        lo = max(0, cluster[0] - SNIPPET_RADIUS)
-        hi = min(len(words), cluster[-1] + SNIPPET_RADIUS + 1)
+        lo = max(0, cluster[0] - radius)
+        hi = min(len(words), cluster[-1] + radius + 1)
         text = "".join(w.get("word", "") for w in words[lo:hi]).strip()
         if lo > 0:
             text = "… " + text

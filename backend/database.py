@@ -194,6 +194,18 @@ CREATE TABLE IF NOT EXISTS playlist_items (
 );
 CREATE INDEX IF NOT EXISTS idx_playlist_items ON playlist_items(playlist_id, position);
 
+-- Questions asked of the whole library, and the answers. One conversation
+-- rather than one per episode: the point of it is that it crosses episodes.
+CREATE TABLE IF NOT EXISTS library_chats (
+    id             TEXT PRIMARY KEY,
+    role           TEXT NOT NULL,          -- user | assistant
+    content        TEXT NOT NULL,
+    -- The passages an answer was built from, so a claim can be checked against
+    -- the audio it came from rather than taken on trust.
+    citations_json TEXT,
+    created_at     TEXT NOT NULL
+);
+
 -- App-wide state with no natural home of its own: when the inbox was last
 -- cleared, how long audio is kept. One row per key rather than a settings
 -- table per feature.

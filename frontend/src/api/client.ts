@@ -558,3 +558,36 @@ export const setRetentionPolicy = (days: number, playedOnly: boolean) =>
 export const pruneStorage = (dryRun: boolean, days?: number) =>
   req<PruneResult>("POST",
     `/storage/prune?dry_run=${dryRun}${days != null ? `&days=${days}` : ""}`);
+
+// --- Ask the library ---
+// Episode chat answers about one episode; this answers across everything
+// transcribed, and every claim carries the episode and second it came from so
+// it can be checked against the audio.
+export interface Citation {
+  index: number;
+  episode_id: string;
+  episode_title: string;
+  podcast_id: string;
+  podcast_title: string;
+  podcast_image?: string | null;
+  published_at?: string | null;
+  start: number;
+  text: string;
+}
+
+export interface AskMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  citations: Citation[];
+  created_at: string;
+  /** What it searched for — useful when an answer is thin. */
+  queries?: string[];
+}
+
+export const getAskHistory = () => req<AskMessage[]>("GET", "/ask");
+
+export const askLibrary = (message: string) =>
+  req<AskMessage>("POST", "/ask", { message });
+
+export const clearAskHistory = () => req("DELETE", "/ask");

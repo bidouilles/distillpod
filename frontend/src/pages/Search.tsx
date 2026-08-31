@@ -6,6 +6,7 @@ import {
 } from "../api/client";
 import TranscriptSearch from "../components/TranscriptSearch";
 import AddYouTube from "../components/AddYouTube";
+import AskLibrary from "../components/AskLibrary";
 
 // ─── Podcast card (shared by search results and suggestions) ──────────────────
 function PodcastCard({
@@ -67,7 +68,9 @@ export default function Search() {
   const [subscribedIds, setSubscribedIds] = useState<Set<string>>(new Set());
   const [subscribing, setSubscribing] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState("");
-  const [mode, setMode] = useState<"podcasts" | "transcripts" | "youtube">("podcasts");
+  // "Ask" comes first: with a library already in place, the most useful thing
+  // to do on this screen is interrogate it rather than add to it.
+  const [mode, setMode] = useState<"ask" | "podcasts" | "transcripts" | "youtube">("ask");
 
   // Suggestions state
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
@@ -117,11 +120,13 @@ export default function Search() {
         </div>
       )}
 
-      {/* Three ways in: finding new podcasts, finding a moment inside episodes
-          you already have, and pulling in a one-off YouTube video. A segmented
-          control keeps the last two discoverable instead of hidden behind a menu. */}
+      {/* Four ways in, ordered by what a library already in place is for:
+          asking it a question, then finding new podcasts, finding an exact
+          phrase inside episodes you have, and pulling in a one-off YouTube
+          video. Ask and Search are both "look inside my episodes" — Ask
+          answers a question and cites; Search finds the words you type. */}
       <div className="flex bg-gray-900 rounded-xl p-1 gap-1">
-        {([["podcasts", "Podcasts"], ["transcripts", "In my episodes"], ["youtube", "YouTube"]] as const).map(([key, label]) => (
+        {([["ask", "Ask"], ["podcasts", "Podcasts"], ["transcripts", "Search"], ["youtube", "YouTube"]] as const).map(([key, label]) => (
           <button
             key={key}
             onClick={() => setMode(key)}
@@ -134,6 +139,8 @@ export default function Search() {
           </button>
         ))}
       </div>
+
+      {mode === "ask" && <AskLibrary />}
 
       {mode === "transcripts" && <TranscriptSearch />}
 

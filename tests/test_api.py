@@ -292,7 +292,7 @@ class TestProtectedRoutes:
         from middleware.auth import PROTECTED_PREFIXES
         for prefix in ("/gists", "/podcasts", "/player", "/chat", "/research", "/tags",
                        "/search", "/youtube", "/queue", "/bookmarks", "/playlists",
-                       "/storage"):
+                       "/storage", "/ask"):
             assert prefix in PROTECTED_PREFIXES, f"{prefix} is reachable without a session"
 
 

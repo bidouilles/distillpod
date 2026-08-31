@@ -17,7 +17,7 @@ from config import settings
 # owner's library. /storage in particular can delete media.
 PROTECTED_PREFIXES = [
     "/gists", "/podcasts", "/player", "/chat", "/research", "/tags", "/search",
-    "/youtube", "/queue", "/bookmarks", "/playlists", "/storage",
+    "/youtube", "/queue", "/bookmarks", "/playlists", "/storage", "/ask",
 ]
 
 

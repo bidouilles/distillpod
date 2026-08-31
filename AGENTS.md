@@ -95,6 +95,7 @@ backend/
     player.py          # Download, stream audio, transcription status, chapters
     gists.py           # Create/list/delete AI gists (distillations)
     bookmarks.py       # Transcript quotes kept with no model call
+    ask.py             # Library-wide questions (retrieval lives in librarian.py)
     queue.py           # Up Next, server-side (the client mirrors it locally)
     playlists.py       # Playlists: manual membership or a stored smart rule
     storage.py         # Media disk usage, retention policy, prune
@@ -118,6 +119,7 @@ backend/
     ad_detector.py     # Ad segment detection (the model call)
     audio_processor.py # Silence measurement, the ffmpeg cut, and its mapping
     timeline.py        # Original <-> clean-cut clock conversion
+    librarian.py       # Plan searches -> retrieve passages -> answer with citations
     chapterizer.py     # Auto-chapter generation
     researcher.py      # Deep research report generation
 frontend/
@@ -160,6 +162,17 @@ scripts/
   is only useful because it is cheap, and in a vault six months later, which of
   the two produced a quote is the difference between standing behind it and
   having to check it.
+- **Library-wide questions retrieve before they generate.** No model call can
+  hold three hundred transcripts, so `services/librarian.py` plans keyword
+  searches (one small call), retrieves passages through the existing FTS index,
+  and answers from those alone (one call), citing each. Two things there are
+  load-bearing: retrieval uses `fts_any_query` — OR of prefix-matched tokens —
+  rather than `fts_query`'s AND, because the queries are a model's guess at the
+  words a speaker used and "model evals" found nothing in an episode saying
+  "models" and "evals"; and when retrieval comes back empty the answer is a
+  fixed sentence rather than a second model call, which is both cheaper and more
+  honest. Prefix matching over the accent-folding tokenizer also bridges
+  languages: "model" reaches "modèle".
 - **The clean cut runs on its own clock.** It is a concatenation of the kept
   spans, so after the first cut it is behind the original by whatever was
   removed. Everything stored — playback positions, distills, bookmarks,

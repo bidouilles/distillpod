@@ -7,7 +7,7 @@ from config import settings
 from database import init_db
 from routers import (
     podcasts, player, gists, tags, search, youtube,
-    queue, bookmarks, playlists, storage,
+    queue, bookmarks, playlists, storage, ask,
 )
 from routers import auth as auth_router
 from routers.chat import router as chat_router
@@ -46,6 +46,7 @@ app.include_router(queue.router)
 app.include_router(bookmarks.router)
 app.include_router(playlists.router)
 app.include_router(storage.router)
+app.include_router(ask.router)
 app.include_router(chat_router)
 app.include_router(research_router)
 
