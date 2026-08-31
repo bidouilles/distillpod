@@ -87,8 +87,15 @@ export const getEpisodes = (podcastId: string, refresh = false) =>
 
 // --- Player ---
 export const startPlay = (episodeId: string, audioUrl: string) =>
-  req<{ audio_url: string; transcript_status: string }>(
+  req<{ audio_url: string; transcript_status: string; status: "ready" | "downloading" }>(
     "POST", "/player/play", { episode_id: episodeId, audio_url: audioUrl }
+  );
+
+/** Downloads run server-side, so several can be fetched at once and none of
+ *  them depend on a screen staying open. */
+export const getDownloadStatus = (episodeId: string) =>
+  req<{ downloaded: boolean; downloading: boolean; error: string | null }>(
+    "GET", `/player/download-status/${episodeId}`
   );
 
 export const getTranscriptStatus = (episodeId: string) =>
@@ -125,6 +132,8 @@ export interface Tag {
 export interface Subscription {
   podcast_id: string; feed_url: string; title: string; image_url?: string;
   subscribed_at: string; tags?: Tag[];
+  /** "podcast" | "youtube_channel" | "youtube_video" (one video, not subscribed). */
+  source?: string;
 }
 export interface Episode {
   id: string; podcast_id: string; title: string; description?: string;
@@ -294,3 +303,21 @@ export const getBrief = (episodeId: string) =>
   req<{ episode_id: string; summary: string | null; generated: boolean }>(
     "GET", `/player/brief/${episodeId}`
   );
+
+/** Check every subscription for new episodes, now, rather than waiting for the
+ *  nightly job. Fetches feeds and channel listings; transcribes nothing. */
+export interface RefreshState {
+  status?: string;
+  running: boolean;
+  new: number;
+  checked: number;
+  failed: number;
+  finished_at: string | null;
+}
+
+export const refreshSubscriptions = () =>
+  req<RefreshState>("POST", "/podcasts/refresh");
+
+/** A refresh runs server-side, so it survives leaving the screen. */
+export const getRefreshStatus = () =>
+  req<RefreshState>("GET", "/podcasts/refresh/status");

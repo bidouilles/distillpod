@@ -60,12 +60,16 @@ async def upsert_channel(db, channel: dict) -> str:
     """Create or refresh the channel's subscription row. Returns its podcast_id."""
     podcast_id = podcast_id_for(channel["channel_id"])
     await db.execute(
-        """INSERT INTO subscriptions (podcast_id, feed_url, title, image_url, subscribed_at)
-           VALUES (?, ?, ?, ?, ?)
+        """INSERT INTO subscriptions
+           (podcast_id, feed_url, title, image_url, subscribed_at, source)
+           VALUES (?, ?, ?, ?, ?, 'youtube_channel')
            ON CONFLICT(podcast_id) DO UPDATE SET
              feed_url = excluded.feed_url,
              title = excluded.title,
-             image_url = COALESCE(excluded.image_url, subscriptions.image_url)""",
+             image_url = COALESCE(excluded.image_url, subscriptions.image_url),
+             -- Deliberately promotes: a channel that existed only because one
+             -- of its videos was added is a real subscription once asked for.
+             source = 'youtube_channel'""",
         (podcast_id,
          youtube.channel_videos_url(channel["channel_id"]),
          channel["title"],

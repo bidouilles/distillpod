@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getFeed, getTags, getProgress, FeedEpisode, Tag, ProgressRecord } from "../api/client";
+import { getFeed, getTags, getProgress, refreshSubscriptions, getRefreshStatus, FeedEpisode, Tag, ProgressRecord } from "../api/client";
 import ContinueListening from "../components/ContinueListening";
+import { clearProgress } from "../context/AudioContext";
 import { getCached, setCached } from "../cache";
 import FeedFilterBar, { FeedFilterState, EMPTY_FILTERS, hasActiveFilters } from "../components/FeedFilterBar";
 
@@ -139,6 +140,8 @@ export default function Home() {
   const [filters, setFilters] = useState<FeedFilterState>(EMPTY_FILTERS);
   const [tags, setTags] = useState<Tag[]>([]);
   const [progress, setProgress] = useState<ProgressRecord[]>([]);
+  const [toast, setToast] = useState("");
+  const refreshPoll = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   const filtering = hasActiveFilters(filters);
 
@@ -171,6 +174,55 @@ export default function Home() {
       setRefreshing(false);
     }
   };
+
+  // The feed itself is a local query, so re-reading it looked instant and
+  // changed nothing — new episodes only appeared after the nightly job. This
+  // asks the subscriptions, which is what the control implies.
+  //
+  // The work runs server-side and is polled rather than awaited, so leaving
+  // Home does not abandon it: coming back picks the run up again and still
+  // reports what it found.
+  const watchRefresh = () => {
+    if (refreshPoll.current) clearInterval(refreshPoll.current);
+    refreshPoll.current = setInterval(async () => {
+      try {
+        const s = await getRefreshStatus();
+        if (s.running) return;
+        if (refreshPoll.current) clearInterval(refreshPoll.current);
+        setRefreshing(false);
+        await fetchFeed();
+        setToast(
+          s.new > 0
+            ? `${s.new} new episode${s.new === 1 ? "" : "s"}`
+            : s.failed && !s.checked ? "Could not reach your subscriptions"
+            : "You're up to date",
+        );
+        setTimeout(() => setToast(""), 3000);
+      } catch { /* transient — keep watching */ }
+    }, 2000);
+  };
+
+  const refreshNow = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setToast("");
+    try {
+      await refreshSubscriptions();
+      watchRefresh();
+    } catch {
+      setRefreshing(false);
+      setToast("Refresh failed");
+      setTimeout(() => setToast(""), 3000);
+    }
+  };
+
+  // Rejoin a refresh that was started before this screen was opened.
+  useEffect(() => {
+    getRefreshStatus()
+      .then(s => { if (s.running) { setRefreshing(true); watchRefresh(); } })
+      .catch(() => {});
+    return () => { if (refreshPoll.current) clearInterval(refreshPoll.current); };
+  }, []);
 
   useEffect(() => { fetchFeed(); }, []);
 
@@ -222,12 +274,24 @@ export default function Home() {
 
   return (
     <div className="space-y-3">
-      <ContinueListening records={progress} />
+      {toast && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 bg-gray-800 text-white px-4 py-2 rounded-full shadow-lg z-50 text-sm border border-gray-700">
+          {toast}
+        </div>
+      )}
+
+      <ContinueListening
+        records={progress}
+        onDismiss={(episodeId) => {
+          clearProgress(episodeId);
+          setProgress(prev => prev.filter(r => r.episode_id !== episodeId));
+        }}
+      />
 
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-bold">Latest Episodes</h1>
         <button
-          onClick={() => fetchFeed(true)}
+          onClick={refreshNow}
           disabled={refreshing}
           className="text-gray-400 hover:text-white disabled:opacity-40 transition-colors p-1"
           title="Refresh"

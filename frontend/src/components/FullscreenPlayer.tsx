@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import LiveTranscript from "./LiveTranscript";
 import { useAudio } from "../context/AudioContext";
 import {
@@ -61,6 +62,7 @@ export default function FullscreenPlayer() {
   const [chaptersData, setChaptersData]   = useState<ChaptersResult | null>(null);
   const [chaptersOpen, setChaptersOpen]   = useState(false);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const nav = useNavigate();
   // Gist state
   const [gisting, setGisting]             = useState(false);
   const [gistFlash, setGistFlash]         = useState(false);
@@ -197,6 +199,26 @@ export default function FullscreenPlayer() {
     }
   };
 
+  // Collapsing the player returns you to whatever screen you were on, which is
+  // often not the episode's. Without this there was no route from a playing
+  // episode to its own page — its summary, chat, distills and export — once you
+  // had navigated away.
+  const openEpisodePage = () => {
+    if (!episode?.id) return;
+    setChaptersOpen(false);
+    setTranscriptOpen(false);
+    setPlayerExpanded(false);
+    // Deliberately not handleClose(): that pops the sentinel history entry with
+    // history.back(), which is asynchronous, so the pending back landed after
+    // this navigation and undid it — the panel closed and nothing moved.
+    // Replacing consumes the sentinel instead of racing it, and leaves back
+    // pointing at whatever screen the player was raised from.
+    nav(`/player/${episode.id}`, {
+      replace: !!window.history.state?.distillpodPlayer,
+      state: { podcast_image: episode.podcast_image, podcast_title: episode.podcast_title },
+    });
+  };
+
   const handleClose = () => {
     setChaptersOpen(false);
     setPlayerExpanded(false);
@@ -282,8 +304,12 @@ export default function FullscreenPlayer() {
               )}
             </div>
 
-            {/* ── Episode info ── */}
-            <div className="text-center px-2">
+            {/* ── Episode info — and the way to its page ── */}
+            <button
+              onClick={openEpisodePage}
+              aria-label="Open episode details"
+              className="text-center px-2 w-full active:opacity-70 transition-opacity"
+            >
               {episode.podcast_title && (
                 <p className="text-xs text-white/40 uppercase tracking-widest font-semibold mb-1">
                   {episode.podcast_title}
@@ -292,7 +318,16 @@ export default function FullscreenPlayer() {
               <h2 className="text-base font-bold text-white leading-snug line-clamp-2">
                 {episode.title}
               </h2>
-            </div>
+              {/* Spelled out rather than left as a tappable title: there is no
+                  hover on a phone, so an invisible target is no target. */}
+              <span className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-white/40">
+                Episode details
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}
+                     strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3">
+                  <polyline points="9 18 15 12 9 6" />
+                </svg>
+              </span>
+            </button>
 
             {/* ── Error ── */}
             {error && (

@@ -14,7 +14,13 @@ const fmtLeft = (secs: number) => {
  * something started on the phone has to show up here on the laptop. Rendered
  * from the records Home already fetched, so it costs no extra request.
  */
-export default function ContinueListening({ records }: { records: ProgressRecord[] }) {
+export default function ContinueListening({
+  records,
+  onDismiss,
+}: {
+  records: ProgressRecord[];
+  onDismiss?: (episodeId: string) => void;
+}) {
   const nav = useNavigate();
 
   // Filtered on position, not on `played`. In this app `played` is set when an
@@ -42,10 +48,25 @@ export default function ContinueListening({ records }: { records: ProgressRecord
             : 0;
           const left = r.duration && r.duration > 0 ? r.duration - r.position : 0;
           return (
+            // The dismiss control is a sibling of the card rather than a child:
+            // the card is itself a button, and a button inside a button is not
+            // valid markup and behaves inconsistently.
+            <div key={r.episode_id} className="relative flex-shrink-0 w-36 snap-start">
+            {onDismiss && (
+              <button
+                onClick={() => onDismiss(r.episode_id)}
+                aria-label={`Remove ${r.title ?? "episode"} from Continue listening`}
+                title="Remove from Continue listening"
+                className="absolute top-1 right-1 z-10 w-9 h-9 flex items-center justify-center text-white/70 hover:text-white"
+              >
+                <span className="w-5 h-5 flex items-center justify-center rounded-full bg-black/60 backdrop-blur-sm text-[11px] leading-none">
+                  ✕
+                </span>
+              </button>
+            )}
             <button
-              key={r.episode_id}
               onClick={() => nav(`/player/${r.episode_id}`)}
-              className="flex-shrink-0 w-36 snap-start text-left bg-gray-900 rounded-xl overflow-hidden active:scale-[0.98] transition-transform"
+              className="w-full text-left bg-gray-900 rounded-xl overflow-hidden active:scale-[0.98] transition-transform"
             >
               {r.podcast_image
                 ? <img
@@ -65,6 +86,7 @@ export default function ContinueListening({ records }: { records: ProgressRecord
                 </div>
               </div>
             </button>
+            </div>
           );
         })}
       </div>

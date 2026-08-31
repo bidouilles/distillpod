@@ -34,3 +34,20 @@ body { background: #030712; color: white; }
 /* Fix react-markdown paragraph-in-list-item orphan */
 .markdown-chat li > p { display: inline; margin: 0; }
 .markdown-chat li > p + p { display: block; margin-top: 0.25rem; }
+
+/* iOS Safari magnifies the whole page when a focused field's text is under
+   16px, and it does not undo that on blur — the page just stays zoomed, with
+   the bottom nav and the send button pushed off-screen. The cure is the font
+   size itself. Locking the viewport with `maximum-scale` would also work and
+   would also take away deliberate pinch-zoom, which is not ours to remove.
+
+   Scoped to touch input so the denser desktop sizing is untouched, and
+   !important because it has to beat Tailwind's text-sm/text-xs utilities on
+   the fields themselves. */
+@media (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}

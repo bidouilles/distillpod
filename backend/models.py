@@ -46,6 +46,9 @@ class Subscription(BaseModel):
     image_url: Optional[str] = None
     last_checked: Optional[datetime] = None
     subscribed_at: datetime
+    # What this row actually is, so the library can show it:
+    # "podcast" | "youtube_channel" | "youtube_video" (one video, not subscribed).
+    source: str = "podcast"
     tags: list[Tag] = []
 
 

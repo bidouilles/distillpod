@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter, HTTPException
 from datetime import datetime, timezone
 import uuid
@@ -54,8 +55,9 @@ async def subscribe(podcast_id: str, feed_url: str, title: str, image_url: str =
     db = await get_db()
     try:
         await db.execute(
-            """INSERT OR IGNORE INTO subscriptions (podcast_id, feed_url, title, image_url, subscribed_at)
-               VALUES (?, ?, ?, ?, ?)""",
+            """INSERT OR IGNORE INTO subscriptions
+               (podcast_id, feed_url, title, image_url, subscribed_at, source)
+               VALUES (?, ?, ?, ?, ?, 'podcast')""",
             (podcast_id, feed_url, title, image_url, datetime.now(timezone.utc).isoformat()),
         )
         await db.commit()
@@ -106,6 +108,129 @@ _FEED_STATUS_SQL = {
     "adfree":      "e.adfree_path IS NOT NULL",
     "downloaded":  "e.downloaded = 1",
 }
+
+
+# A refresh outlives the screen that started it. The work runs as a background
+# task and its outcome is kept here, so navigating away and coming back can
+# still show that one is running, or what the last one found. Single-user app,
+# so module state is the right size for this — the same shape as the guards on
+# transcription and channel imports.
+_refresh: dict = {
+    "running": False,
+    "new": 0,
+    "checked": 0,
+    "failed": 0,
+    "finished_at": None,
+}
+
+
+async def _refresh_all() -> None:
+    """Check every subscription for new episodes. Never raises."""
+    added = checked = failed = 0
+    try:
+        db = await get_db()
+        try:
+            # Same rule as the nightly job: a one-off video's channel is not a
+            # subscription, so it is not polled.
+            subs = await db.execute_fetchall(
+                """SELECT podcast_id, feed_url, title FROM subscriptions
+                   WHERE COALESCE(source, 'podcast') != 'youtube_video'"""
+            )
+        finally:
+            await db.close()
+
+        for sub in subs:
+            podcast_id, feed_url = sub["podcast_id"], sub["feed_url"]
+            checked += 1
+            try:
+                if podcast_id.startswith("yt-"):
+                    from services import youtube_library
+                    before = await _episode_count(podcast_id)
+                    await youtube_library.sync_channel(
+                        podcast_id[len("yt-"):], transcribe=False
+                    )
+                    added += max(0, await _episode_count(podcast_id) - before)
+                else:
+                    episodes = await rss.fetch_episodes(feed_url, podcast_id, limit=20)
+                    added += await _insert_episodes(podcast_id, episodes)
+            except Exception:
+                # One dead feed must not stop the rest being checked.
+                failed += 1
+                continue
+    finally:
+        _refresh.update({
+            "running": False,
+            "new": added,
+            "checked": checked,
+            "failed": failed,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+
+@router.post("/refresh")
+async def refresh_subscriptions():
+    """Start checking every subscription for new episodes.
+
+    Returns immediately. The feed itself is a local query, so the refresh
+    control used to re-read rows that could only change overnight — it looked
+    instant because it did nothing. This actually goes out and asks, and
+    because that takes seconds it runs in the background and is polled, so
+    leaving the screen does not abandon it.
+
+    Cheap on purpose: one RSS fetch per podcast, two requests per YouTube
+    channel, and nothing transcribed or downloaded. The nightly job still owns
+    that work.
+    """
+    if _refresh["running"]:
+        return {"status": "already_running", **_refresh}
+    _refresh.update({"running": True, "new": 0, "checked": 0, "failed": 0})
+    asyncio.create_task(_refresh_all())
+    return {"status": "started", **_refresh}
+
+
+@router.get("/refresh/status")
+async def refresh_status():
+    """Whether a refresh is running, and what the last one found."""
+    return {**_refresh}
+
+
+async def _episode_count(podcast_id: str) -> int:
+    db = await get_db()
+    try:
+        row = await db.execute_fetchone(
+            "SELECT COUNT(*) AS n FROM episodes WHERE podcast_id = ?", (podcast_id,)
+        )
+        return row["n"] if row else 0
+    finally:
+        await db.close()
+
+
+async def _insert_episodes(podcast_id: str, episodes: list) -> int:
+    """Insert any episodes not already stored. Returns how many were new."""
+    if not episodes:
+        return 0
+    db = await get_db()
+    try:
+        before = (await db.execute_fetchone(
+            "SELECT COUNT(*) AS n FROM episodes WHERE podcast_id = ?", (podcast_id,)
+        ))["n"]
+        for ep in episodes:
+            await db.execute(
+                """INSERT OR IGNORE INTO episodes
+                   (id, podcast_id, title, description, audio_url, duration_seconds,
+                    published_at, image_url)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (ep.id, ep.podcast_id, ep.title, ep.description, ep.audio_url,
+                 ep.duration_seconds,
+                 ep.published_at.isoformat() if ep.published_at else None, ep.image_url),
+            )
+        await db.commit()
+        after = (await db.execute_fetchone(
+            "SELECT COUNT(*) AS n FROM episodes WHERE podcast_id = ?", (podcast_id,)
+        ))["n"]
+        return after - before
+    finally:
+        await db.close()
 
 
 @router.get("/feed")
@@ -205,6 +330,15 @@ async def get_episodes(podcast_id: str, refresh: bool = False, limit: int = 100,
                     )
                 except Exception as exc:
                     raise HTTPException(502, f"Could not refresh the channel: {exc}")
+                # Asking a channel's own page for its latest videos is asking to
+                # follow it. Promote a one-off row rather than filling it with
+                # uploads while its badge still says nobody subscribed.
+                await db.execute(
+                    """UPDATE subscriptions SET source = 'youtube_channel'
+                       WHERE podcast_id = ? AND COALESCE(source, '') = 'youtube_video'""",
+                    (podcast_id,),
+                )
+                await db.commit()
                 episodes = []
             else:
                 episodes = await rss.fetch_episodes(row["feed_url"], podcast_id)
