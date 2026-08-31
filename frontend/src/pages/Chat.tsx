@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useParams, useLocation, useNavigate } from "react-router-dom";
-import { getChat, initChat, sendChatMessage, ChatMessage } from "../api/client";
+import { getChat, initChat, sendChatMessage, getEpisode, ChatMessage } from "../api/client";
 import { useAudio } from "../context/AudioContext";
+import { copyText, downloadText, slugify } from "../lib/clipboard";
 import ReactMarkdown from "react-markdown";
 
 const markdownComponents = {
@@ -19,11 +20,72 @@ const markdownComponents = {
   },
 };
 
+/** Copy one message's raw Markdown.
+ *
+ *  Sits beside the bubble rather than below it: bubbles are max-w-[85%], so the
+ *  leftover gutter fits a 44px touch target without adding vertical space to
+ *  every turn. Always visible — hover affordances do not exist on a phone.
+ */
+function MessageCopyButton({ text }: { text: string }) {
+  const [state, setState] = useState<"idle" | "ok" | "fail">("idle");
+
+  const onClick = async () => {
+    const ok = await copyText(text);
+    setState(ok ? "ok" : "fail");
+    setTimeout(() => setState("idle"), 1500);
+  };
+
+  return (
+    <button
+      onClick={onClick}
+      aria-label="Copy this message"
+      title="Copy this message"
+      className={`flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-lg transition-colors ${
+        state === "ok" ? "text-green-400" : state === "fail" ? "text-red-400" : "text-gray-600 hover:text-gray-300 hover:bg-gray-800"
+      }`}
+    >
+      {state === "ok" ? (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+
+/** Render the conversation as Markdown. Assistant replies are already Markdown,
+ *  so they drop in verbatim; user turns are plain text. */
+function buildMarkdown(episodeTitle: string, messages: ChatMessage[]): string {
+  const out = [
+    `# ${episodeTitle}`,
+    "",
+    `_Chat exported from DistillPod — ${new Date().toLocaleString()}_`,
+    "",
+    "---",
+    "",
+  ];
+  for (const m of messages) {
+    out.push(m.role === "user" ? "### You" : "### DistillPod", "", m.content.trim(), "");
+  }
+  return out.join("\n");
+}
+
+
 export default function Chat() {
   const { episodeId } = useParams<{ episodeId: string }>();
   const location = useLocation();
   const navigate = useNavigate();
-  const episodeTitle = (location.state as { episodeTitle?: string } | null)?.episodeTitle ?? "Episode";
+  const passedTitle = (location.state as { episodeTitle?: string } | null)?.episodeTitle;
+  // location.state is empty on a direct load or refresh, so fall back to the API
+  // rather than showing (and exporting) a generic "Episode".
+  const [fetchedTitle, setFetchedTitle] = useState<string | null>(null);
+  const episodeTitle = passedTitle ?? fetchedTitle ?? "Episode";
   const { episode: audioEpisode } = useAudio();
   const bottomOffset = audioEpisode ? "calc(56px + 56px + env(safe-area-inset-bottom))" : "calc(56px + env(safe-area-inset-bottom))";
 
@@ -31,6 +93,7 @@ export default function Chat() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [initializing, setInitializing] = useState(true);
+  const [exported, setExported] = useState<"copied" | "failed" | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -40,6 +103,15 @@ export default function Chat() {
   useEffect(() => {
     scrollToBottom();
   }, [messages, loading]);
+
+  useEffect(() => {
+    if (!episodeId || passedTitle) return;
+    let cancelled = false;
+    getEpisode(episodeId)
+      .then(ep => { if (!cancelled) setFetchedTitle(ep.title); })
+      .catch(() => { /* header falls back to "Episode" */ });
+    return () => { cancelled = true; };
+  }, [episodeId, passedTitle]);
 
   useEffect(() => {
     if (!episodeId) return;
@@ -92,6 +164,16 @@ export default function Chat() {
     }
   };
 
+  const handleCopy = async () => {
+    const ok = await copyText(buildMarkdown(episodeTitle, messages));
+    setExported(ok ? "copied" : "failed");
+    setTimeout(() => setExported(null), 2000);
+  };
+
+  const handleDownload = () => {
+    downloadText(`${slugify(episodeTitle)}-chat.md`, buildMarkdown(episodeTitle, messages));
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -100,12 +182,17 @@ export default function Chat() {
   };
 
   return (
-    <div className="fixed top-0 left-0 right-0 flex flex-col" style={{ background: "#1A1A1A", bottom: bottomOffset }}>
+    // z-[45] sits above the app banner and MiniPlayer (both z-40) so this
+    // full-screen view's own header — back arrow, title, export actions — is not
+    // painted underneath them, but stays below BottomNav/QueueSheet (z-50) and
+    // FullscreenPlayer (z-[60]).
+    <div className="fixed top-0 left-0 right-0 flex flex-col z-[45]" style={{ background: "#1A1A1A", bottom: bottomOffset }}>
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-800 bg-gray-900" style={{ paddingTop: "max(0.75rem, env(safe-area-inset-top))" }}>
         <button
           onClick={() => navigate(-1)}
-          className="text-gray-300 hover:text-white transition-colors"
+          aria-label="Back"
+          className="flex-shrink-0 -ml-2 w-11 h-11 flex items-center justify-center text-gray-300 hover:text-white transition-colors"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6">
             <polyline points="15 18 9 12 15 6" />
@@ -114,6 +201,25 @@ export default function Chat() {
         <div className="min-w-0 flex-1">
           <h1 className="text-sm font-bold truncate" style={{ color: "#FFD700" }}>Chat</h1>
           <p className="text-xs text-gray-400 truncate">{episodeTitle}</p>
+        </div>
+
+        <div className="flex flex-shrink-0 gap-1">
+          <button
+            onClick={handleCopy}
+            disabled={messages.length === 0}
+            title="Copy conversation as Markdown"
+            className="text-xs text-gray-400 hover:text-white px-2 min-h-[44px] inline-flex items-center rounded hover:bg-gray-700 transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+          >
+            {exported === "copied" ? "✓ Copied" : exported === "failed" ? "✕ Failed" : "📋 Copy"}
+          </button>
+          <button
+            onClick={handleDownload}
+            disabled={messages.length === 0}
+            title="Download conversation as a .md file"
+            className="text-xs text-gray-400 hover:text-white px-2 min-h-[44px] inline-flex items-center rounded hover:bg-gray-700 transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+          >
+            ⬇ .md
+          </button>
         </div>
       </div>
 
@@ -129,7 +235,8 @@ export default function Chat() {
         )}
 
         {messages.map((msg) => (
-          <div key={msg.id} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+          <div key={msg.id} className={`flex items-end gap-0.5 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+            {msg.role === "user" && <MessageCopyButton text={msg.content} />}
             <div
               className={`selectable max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
                 msg.role === "assistant"
@@ -142,6 +249,7 @@ export default function Chat() {
                 ? <div className="markdown-chat"><ReactMarkdown components={markdownComponents}>{msg.content}</ReactMarkdown></div>
                 : msg.content}
             </div>
+            {msg.role === "assistant" && <MessageCopyButton text={msg.content} />}
           </div>
         ))}
 
@@ -176,7 +284,7 @@ export default function Chat() {
           <button
             onClick={handleSend}
             disabled={!input.trim() || loading}
-            className="flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center transition-colors disabled:opacity-40"
+            className="flex-shrink-0 w-11 h-11 rounded-xl flex items-center justify-center transition-colors disabled:opacity-40"
             style={{ background: "#FFD700" }}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="#1A1A1A" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">

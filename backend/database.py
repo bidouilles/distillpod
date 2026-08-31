@@ -1,7 +1,11 @@
+import logging
 import aiosqlite
 import json
 from pathlib import Path
 from config import settings
+from ids import is_url_safe, safe_episode_id
+
+log = logging.getLogger(__name__)
 
 DB_PATH = str(settings.db_path)
 
@@ -130,3 +134,47 @@ async def init_db():
             except Exception:
                 pass
         await db.commit()
+
+        await _migrate_unsafe_episode_ids(db)
+
+
+# Tables whose episode_id points at episodes.id; all must move together.
+_EPISODE_CHILD_TABLES = ("transcripts", "gists", "episode_chats", "researches", "chapters")
+
+
+async def _migrate_unsafe_episode_ids(db) -> None:
+    """Rewrite episode ids that cannot appear in a URL path.
+
+    Ids come from the RSS <guid>, and some feeds use a URL there (Lex Fridman
+    emits `https://lexfridman.com/?p=6506`). Those break `/player/:episodeId`
+    in the SPA and `/player/episode/{id}` in the API, so such episodes were
+    unreachable. Re-map them onto the hash `ids.safe_episode_id` now produces at
+    ingest, carrying every child row across so transcripts, gists, chapters,
+    chats and research keep pointing at the right episode.
+
+    Already-safe ids are left alone, so this is a no-op on a healthy database.
+    """
+    rows = await db.execute_fetchall("SELECT id FROM episodes")
+    remap = {
+        r[0]: safe_episode_id(r[0])
+        for r in rows
+        if not is_url_safe(r[0])
+    }
+    if not remap:
+        return
+
+    for old_id, new_id in remap.items():
+        # A collision would mean the safe id already exists; skip rather than
+        # clobber an unrelated episode.
+        existing = await db.execute_fetchall(
+            "SELECT 1 FROM episodes WHERE id = ?", (new_id,)
+        )
+        if existing:
+            continue
+        await db.execute("UPDATE episodes SET id = ? WHERE id = ?", (new_id, old_id))
+        for table in _EPISODE_CHILD_TABLES:
+            await db.execute(
+                f"UPDATE {table} SET episode_id = ? WHERE episode_id = ?", (new_id, old_id)
+            )
+    await db.commit()
+    log.info("migrated %d episode id(s) to a URL-safe form", len(remap))

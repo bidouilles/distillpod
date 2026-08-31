@@ -3,7 +3,9 @@
 > A self-hosted, mobile-first podcast app with AI-powered features: transcription, distillations, ad detection, chapter generation, episode chat, and deep research reports. No per-call API costs — all AI runs via a coding-agent CLI through your existing subscription.
 
 > [!NOTE]
-> **This is a fork of [andrepaim/distillpod](https://github.com/andrepaim/distillpod).** Upstream drives its AI features with the Claude CLI; this fork drives them with the **Codex CLI** instead. Both backends are supported — set `LLM_BACKEND=claude` to get the original behaviour. The "Why I Built This" section below is the upstream author's.
+> **This is a fork of [andrepaim/distillpod](https://github.com/andrepaim/distillpod).** It makes both AI workloads swappable so you can fit them to your server:
+> **reasoning** runs on the **Codex CLI** by default (`LLM_BACKEND=claude` restores upstream's Claude CLI), and **transcription** uses **Mistral Voxtral** when a `MISTRAL_API_KEY` is present, falling back to local faster-whisper otherwise (`STT_BACKEND` pins either).
+> See [Choosing your backends](#choosing-your-backends). The "Why I Built This" section below is the upstream author's.
 
 ---
 
@@ -32,6 +34,94 @@ If you have a VPS and a Codex (or Claude) subscription, you already have everyth
 
 ---
 
+## Choosing your backends
+
+Both AI workloads are swappable, because the right answer depends entirely on
+what your server can actually do. Neither is hardcoded — each is one env var,
+and you can mix them freely.
+
+### 1. Reasoning — distillations, chat, ad detection, chapters, research
+
+Everything goes through `backend/services/llm.py`, which shells out to a coding-agent
+CLI authenticated by your existing subscription. No API key, no per-call billing.
+
+| `LLM_BACKEND` | Uses | Choose when |
+|---|---|---|
+| `codex` *(default)* | `codex exec` | You have a Codex subscription |
+| `claude` | `claude --print` | You have a Claude subscription (upstream's original setup) |
+
+```bash
+LLM_BACKEND=codex     # npm i -g @openai/codex && codex login
+LLM_BACKEND=claude    # npm i -g @anthropic-ai/claude-code && claude login
+```
+
+Both need Node on the box and a one-time interactive login. Callers never know
+which is in use, so switching is genuinely a one-line change.
+
+### 2. Transcription — turning audio into a word-level transcript
+
+This is the one that will actually strain a small VPS. Everything downstream
+reads the transcript, so a weak one silently degrades every feature.
+
+| `STT_BACKEND` | Uses | Cost on your server |
+|---|---|---|
+| `auto` *(default)* | Voxtral if a key is set, else `mlx` if importable, else `whisper` | — |
+| `voxtral` | Mistral hosted API | Negligible: an ffmpeg downmix and one HTTP request |
+| `mlx` | mlx-whisper on the Apple Silicon GPU | Local, but ~8x faster than the CPU path |
+| `whisper` | faster-whisper, on CPU | ~1.5GB RAM for `medium`, pins a core for minutes |
+
+**On a Mac, `WHISPER_DEVICE` cannot use the GPU.** faster-whisper is built on
+CTranslate2, which has no Metal backend at all — it rejects `mps` and `metal`
+outright and was not compiled with CUDA. Use `STT_BACKEND=mlx` instead
+(`pip install mlx-whisper`), which runs the same Whisper model on the GPU.
+
+Measured on the same machine and clip with `medium`:
+
+| Backend | Speed | 27-min episode |
+|---|---|---|
+| `voxtral` | — | ~35s |
+| `mlx` (GPU) | 14.5x realtime | ~2 min |
+| `whisper` (CPU) | 1.79x realtime | ~15 min |
+
+**Very long episodes:** Voxtral accepts up to 3 hours per request, so anything
+longer is split into 1-hour pieces and stitched back onto one timeline
+automatically — a 5-hour Lex Fridman episode transcribes fine. Splitting costs
+roughly 1.5% of words at the cut boundaries, so episodes under an hour are sent
+whole and pay nothing.
+
+**On a 27-minute episode:** Voxtral takes **~35s**. faster-whisper `small` takes
+**~7 min** on a warm Apple M-series core (~3.9× realtime) — and a shared vCPU
+with `medium` or `large-v3` will be considerably slower again.
+
+```bash
+# Small VPS, or non-English podcasts: let Mistral do the heavy lifting
+MISTRAL_API_KEY=sk-...
+STT_LANGUAGE=fr          # optional; skips auto-detection
+
+# Everything stays on your box — no key needed
+STT_BACKEND=whisper
+WHISPER_MODEL=medium
+```
+
+### Which should you pick?
+
+- **Small or shared VPS** (1–2 vCPU, ≤2GB RAM) — use Voxtral. Local Whisper will
+  either swap itself to death or make transcription take longer than listening
+  to the episode.
+- **Non-English podcasts** — use Voxtral. It is markedly better on French than
+  `medium`, and you would otherwise need `large-v3`, which is heavier still.
+- **Audio must not leave your server** — use `STT_BACKEND=whisper`. This is the
+  one hard trade-off: Voxtral uploads the episode audio to Mistral. Setting the
+  backend explicitly means a stray `MISTRAL_API_KEY` in the environment can
+  never silently override that choice.
+- **No Mistral billing** — use whisper, and size the model to your CPU.
+
+Transcription is the only stage that leaves your infrastructure, and only if you
+choose Voxtral. The reasoning CLI always runs locally against your own
+subscription either way.
+
+---
+
 ## Features
 
 - **📰 Home feed** — unified list of the latest episodes across all subscriptions, sorted by date. Shows distillation count per episode.
@@ -41,7 +131,7 @@ If you have a VPS and a Codex (or Claude) subscription, you already have everyth
 - **⚗️ Distill** — tap at any moment while listening. Captures the last 60 seconds of transcript, calls the agent CLI, and returns a verbatim quote and a 1–2 sentence insight (~30s).
 - **✂️ Ad-free audio** — after transcription, the model classifies ad segments and ffmpeg cuts them out. Stream the clean version from the player.
 - **📖 Chapters** — the model generates 4–10 named chapters with timestamps from the full transcript. Tap any chapter to jump directly.
-- **💬 Episode chat** — ask questions about any transcribed episode. The model answers using the full transcript as context. History kept per episode (capped at 50 messages).
+- **💬 Episode chat** — ask questions about any transcribed episode. The model answers using the full transcript as context. History kept per episode (capped at 50 messages). Copy the whole conversation as Markdown or download it as a `.md` file from the chat header.
 - **🔬 Research** — trigger a deep research report from any distillation. The model generates queries, Tavily runs web searches, then synthesizes findings into an HTML report. Delivered via Telegram.
 - **📋 Distillations library** — all your distillations grouped by episode. Copy, delete, or trigger research from any entry.
 - **⚡ Stale-while-revalidate caching** — data is cached in localStorage with a 30-minute TTL and refreshed silently in the background.
@@ -116,21 +206,31 @@ When you tap Play:
 
 1. `POST /player/play` triggers a background download + transcription task
 2. The episode MP3 is downloaded to `/media/` (streaming, skips if cached)
-3. faster-whisper transcribes with `word_timestamps=True` (CPU, `medium` model by default)
+3. `services/stt.py` transcribes to word-level timestamps
 4. Word-level timestamps saved to `transcripts` table
 5. Ad detection runs non-fatally after transcription
 6. The ⚗️ Distill button unlocks when `transcript_status = done`
 
-#### Model trade-offs
+#### Choosing a transcription backend
 
-| Model | Speed (CPU) | Accuracy |
+`STT_BACKEND=auto` (the default) uses **Voxtral** when `MISTRAL_API_KEY` is set,
+and falls back to **faster-whisper** otherwise. Set it to `voxtral` or `whisper`
+to pin one explicitly — an explicit `whisper` wins even if a key is present.
+
+| | Voxtral (`voxtral-mini-latest`) | faster-whisper |
 |---|---|---|
-| `base` | Fastest | Good |
-| `small` | Fast | Better |
-| `medium` | Moderate | Very good (default) |
-| `large-v3` | Slow | Best |
+| Speed | ~35s for a 27-minute episode | ~7 min for the same (`small`, warm, Apple M-series CPU); slower on a typical VPS and with `medium`/`large-v3` |
+| Privacy | Audio is uploaded to Mistral | Never leaves your server |
+| Cost | Per-minute API billing | Free, but pins a CPU core |
+| Non-English | Strong | Needs `large-v3` to compete |
+| Install | Nothing | ~1.5GB model + CTranslate2 |
 
-Set via `WHISPER_MODEL` in `.env`.
+Audio is downmixed to 16 kHz mono before upload, which keeps long episodes under
+the API size limit and costs nothing in accuracy — speech recognition gains
+nothing from stereo or music-grade bitrates.
+
+Whisper model sizes (`WHISPER_MODEL`): `base` fastest, `small`, `medium`
+(default), `large-v3` best. Set `STT_LANGUAGE=fr` to skip auto-detection.
 
 ---
 
@@ -143,7 +243,7 @@ Set via `WHISPER_MODEL` in `.env`.
 | State | [Zustand](https://zustand-demo.pmnd.rs/) |
 | Backend | [FastAPI](https://fastapi.tiangolo.com/) + [uvicorn](https://www.uvicorn.org/) |
 | Database | [aiosqlite](https://aiosqlite.omnilib.dev/) — async SQLite (WAL mode) |
-| Transcription | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — local speech-to-text (CTranslate2, int8) |
+| Transcription | [Voxtral](https://mistral.ai/) hosted STT, or [faster-whisper](https://github.com/SYSTRAN/faster-whisper) locally (CTranslate2, int8) |
 | AI | Codex CLI (`codex exec`), or Claude CLI (`claude --print`) |
 | RSS | [feedparser](https://feedparser.readthedocs.io/) |
 | HTTP client | [httpx](https://www.python-httpx.org/) |
@@ -190,7 +290,8 @@ Set via `WHISPER_MODEL` in `.env`.
 | `backend/routers/chat.py` | Episode Q&A — init, message, history |
 | `backend/routers/research.py` | Trigger + poll research reports |
 | `backend/services/downloader.py` | Async MP3 download to `/media/` |
-| `backend/services/transcriber.py` | faster-whisper, word-level timestamps, async background task |
+| `backend/services/stt.py` | Speech-to-text adapter — Voxtral or faster-whisper |
+| `backend/services/transcriber.py` | Transcription orchestration, DB writes, async background task |
 | `backend/services/llm.py` | Agent CLI adapter — the only place a model is invoked |
 | `backend/services/snip_engine.py` | Timestamp window lookup + distillation |
 | `backend/services/ad_detector.py` | Ad classification + ffmpeg audio surgery |
@@ -211,7 +312,7 @@ Set via `WHISPER_MODEL` in `.env`.
 - Node.js 18+
 - ffmpeg (for ad-free audio generation)
 - [Codex CLI](https://developers.openai.com/codex/cli) installed and authenticated (or the [Claude CLI](https://claude.ai/code) with `LLM_BACKEND=claude`)
-- A VPS with a few GB of RAM (faster-whisper `medium` uses ~1.5GB)
+- A VPS with a few GB of RAM if you use faster-whisper (`medium` uses ~1.5GB); far less with Voxtral
 
 ### Quick start
 
@@ -249,6 +350,10 @@ Copy `.env.example` to `backend/.env` and edit:
 | `TAVILY_API_KEY` | No | Enables deep research reports |
 | `TELEGRAM_BOT_TOKEN` | No | Telegram notifications |
 | `TELEGRAM_CHAT_ID` | No | Telegram chat ID |
+| `STT_BACKEND` | No | `auto` (default), `voxtral`, or `whisper` |
+| `MISTRAL_API_KEY` | No | Mistral key; its presence makes `auto` choose Voxtral |
+| `STT_MODEL` | No | Voxtral model (default `voxtral-mini-latest`) |
+| `STT_LANGUAGE` | No | ISO code e.g. `fr`; empty auto-detects |
 | `WHISPER_MODEL` | No | Whisper model size: `base`, `small`, `medium` (default), `large-v3` |
 | `MEDIA_DIR` | No | Path for downloaded MP3s (default: `media/`) |
 | `REPORTS_DIR` | No | Path for HTML research reports (default: `reports/`) |
@@ -311,7 +416,7 @@ The daily sync pipeline per subscription:
 1. Reset stuck `processing` episodes
 2. Fetch latest 5 RSS episodes
 3. Download recent episodes (≤48h old)
-4. Transcribe with faster-whisper
+4. Transcribe via `services/stt.py`
 5. Detect + remove ads (non-fatal)
 6. Generate chapters + episode summary
 7. Telegram alert on errors
