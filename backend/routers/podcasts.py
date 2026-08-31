@@ -330,6 +330,15 @@ async def get_episodes(podcast_id: str, refresh: bool = False, limit: int = 100,
                     )
                 except Exception as exc:
                     raise HTTPException(502, f"Could not refresh the channel: {exc}")
+                # Asking a channel's own page for its latest videos is asking to
+                # follow it. Promote a one-off row rather than filling it with
+                # uploads while its badge still says nobody subscribed.
+                await db.execute(
+                    """UPDATE subscriptions SET source = 'youtube_channel'
+                       WHERE podcast_id = ? AND COALESCE(source, '') = 'youtube_video'""",
+                    (podcast_id,),
+                )
+                await db.commit()
                 episodes = []
             else:
                 episodes = await rss.fetch_episodes(row["feed_url"], podcast_id)

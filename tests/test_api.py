@@ -634,3 +634,22 @@ class TestSubscriptionSource:
             await client.post("/podcasts/refresh")
             await TestRefreshSubscriptions._settle(client)
         assert not sync.called
+
+    async def test_refreshing_a_one_off_channels_page_follows_it(self, client, tmp_db):
+        """Asking that page for new videos is asking to follow the channel; the
+        badge must not keep saying nobody subscribed while uploads arrive."""
+        conn = sqlite3.connect(tmp_db)
+        conn.execute(
+            "INSERT INTO subscriptions (podcast_id, feed_url, title, subscribed_at, source) VALUES (?, ?, ?, ?, ?)",
+            ("yt-UConeoff", "https://www.youtube.com/channel/UConeoff/videos",
+             "Some Channel", "2026-01-01T00:00:00", "youtube_video"),
+        )
+        conn.commit(); conn.close()
+
+        with patch("services.youtube_library.sync_channel", AsyncMock(return_value={})):
+            r = await client.get("/podcasts/yt-UConeoff/episodes?refresh=true")
+        assert r.status_code == 200
+
+        subs = (await client.get("/podcasts/subscriptions")).json()
+        row = next(s for s in subs if s["podcast_id"] == "yt-UConeoff")
+        assert row["source"] == "youtube_channel"
