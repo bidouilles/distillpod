@@ -100,3 +100,9 @@ async def client(tmp_db):
     # Restore
     database.DB_PATH = orig_db_path
     config.settings.test_mode = orig_test_mode
+
+
+@pytest.fixture
+def seeded_podcast_id():
+    """The podcast created by seed_db — the subject of tag tests."""
+    return PODCAST_ID

@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from datetime import datetime, timezone
 import uuid
 from database import get_db
-from models import Podcast, Subscription, Episode
+from models import Podcast, Subscription, Episode, Tag
 from services import podcast_index, rss
 
 router = APIRouter(prefix="/podcasts", tags=["podcasts"])
@@ -32,7 +32,19 @@ async def list_subscriptions() -> list[Subscription]:
     db = await get_db()
     try:
         rows = await db.execute_fetchall("SELECT * FROM subscriptions ORDER BY subscribed_at DESC")
-        return [Subscription(**dict(r)) for r in rows]
+        # One query for every podcast's tags, rather than one per subscription.
+        tag_rows = await db.execute_fetchall(
+            """SELECT pt.podcast_id, t.id, t.name
+               FROM podcast_tags pt JOIN tags t ON t.id = pt.tag_id
+               ORDER BY t.name COLLATE NOCASE"""
+        )
+        by_podcast: dict[str, list[Tag]] = {}
+        for r in tag_rows:
+            by_podcast.setdefault(r["podcast_id"], []).append(Tag(id=r["id"], name=r["name"]))
+        return [
+            Subscription(**dict(r), tags=by_podcast.get(r["podcast_id"], []))
+            for r in rows
+        ]
     finally:
         await db.close()
 
@@ -87,13 +99,66 @@ async def dismiss_suggestion(suggestion_id: str):
     return {"status": "dismissed"}
 
 
+# Feed filters that map to a condition on the episode row.
+_FEED_STATUS_SQL = {
+    "transcribed": "e.transcript_status = 'done'",
+    "distilled":   "EXISTS (SELECT 1 FROM gists g2 WHERE g2.episode_id = e.id)",
+    "adfree":      "e.adfree_path IS NOT NULL",
+    "downloaded":  "e.downloaded = 1",
+}
+
+
 @router.get("/feed")
-async def get_feed() -> list[dict]:
-    """Single-query combined feed: episodes joined with subscriptions + distill counts."""
+async def get_feed(
+    q: str = "",
+    tag_id: str = "",
+    podcast_id: str = "",
+    status: str = "",
+    limit: int = 50,
+) -> list[dict]:
+    """Combined feed: episodes joined with subscriptions + distill counts.
+
+    Optional filters, all combinable:
+      q           substring of the episode or podcast title
+      tag_id      only podcasts carrying this tag
+      podcast_id  a single podcast
+      status      one of _FEED_STATUS_SQL
+
+    Filtering happens here rather than in the client because the feed is capped
+    at `limit`: filtering a already-truncated page would silently hide matches
+    that fall outside the most recent 50 episodes.
+    """
+    where: list[str] = []
+    params: list = []
+
+    if q.strip():
+        # Title only. Descriptions are large HTML blobs (show notes, sponsor
+        # links) and matching them buries real title hits in noise.
+        like = f"%{q.strip()}%"
+        where.append("(e.title LIKE ? OR s.title LIKE ?)")
+        params += [like, like]
+
+    if tag_id:
+        where.append(
+            "EXISTS (SELECT 1 FROM podcast_tags pt "
+            "WHERE pt.podcast_id = e.podcast_id AND pt.tag_id = ?)"
+        )
+        params.append(tag_id)
+
+    if podcast_id:
+        where.append("e.podcast_id = ?")
+        params.append(podcast_id)
+
+    if status and status in _FEED_STATUS_SQL:
+        where.append(_FEED_STATUS_SQL[status])
+
+    clause = f"WHERE {' AND '.join(where)}" if where else ""
+    params.append(max(1, min(limit, 200)))
+
     db = await get_db()
     try:
         rows = await db.execute_fetchall(
-            """
+            f"""
             SELECT
                 e.id, e.podcast_id, e.title, e.description, e.audio_url, e.duration_seconds,
                 e.published_at, e.image_url, e.downloaded, e.transcript_status, e.ads_detected,
@@ -103,10 +168,12 @@ async def get_feed() -> list[dict]:
             FROM episodes e
             JOIN subscriptions s ON e.podcast_id = s.podcast_id
             LEFT JOIN gists g ON g.episode_id = e.id
+            {clause}
             GROUP BY e.id
             ORDER BY e.published_at DESC
-            LIMIT 50
-            """
+            LIMIT ?
+            """,
+            tuple(params),
         )
         return [dict(r) for r in rows]
     finally:

@@ -4,6 +4,7 @@ import {
   getSuggestions, dismissSuggestion,
   Podcast, Suggestion,
 } from "../api/client";
+import TranscriptSearch from "../components/TranscriptSearch";
 
 // ─── Podcast card (shared by search results and suggestions) ──────────────────
 function PodcastCard({
@@ -65,6 +66,7 @@ export default function Search() {
   const [subscribedIds, setSubscribedIds] = useState<Set<string>>(new Set());
   const [subscribing, setSubscribing] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState("");
+  const [mode, setMode] = useState<"podcasts" | "transcripts">("podcasts");
 
   // Suggestions state
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
@@ -113,6 +115,28 @@ export default function Search() {
           ✓ {toast}
         </div>
       )}
+
+      {/* Two different searches live here: finding new podcasts, and finding a
+          moment inside episodes you already have. A segmented control keeps the
+          second discoverable instead of hidden behind a menu. */}
+      <div className="flex bg-gray-900 rounded-xl p-1 gap-1">
+        {([["podcasts", "Find podcasts"], ["transcripts", "In my episodes"]] as const).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setMode(key)}
+            aria-pressed={mode === key}
+            className={`flex-1 min-h-[40px] rounded-lg text-xs font-medium transition-colors ${
+              mode === key ? "bg-indigo-600 text-white" : "text-gray-400 hover:text-gray-200"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {mode === "transcripts" && <TranscriptSearch />}
+
+      {mode === "podcasts" && <>
 
       {/* Search bar */}
       <div className="flex gap-2">
@@ -190,6 +214,8 @@ export default function Search() {
           Suggestions will appear here after the first daily job runs.
         </p>
       )}
+
+      </>}
     </div>
   );
 }

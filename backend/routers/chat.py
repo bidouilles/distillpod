@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+import shownotes
 from database import get_db
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -35,16 +36,33 @@ async def get_transcript(episode_id: str) -> str:
         await db.close()
 
 
-async def get_episode_title(episode_id: str) -> str:
+async def get_episode_context(episode_id: str) -> tuple[str, str]:
+    """Title and flattened show notes.
+
+    The notes carry guest names, handles, and links that are never spoken, so
+    the transcript alone cannot answer "what was his blog?".
+    """
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT title FROM episodes WHERE id = ?", (episode_id,)
+            "SELECT title, description FROM episodes WHERE id = ?", (episode_id,)
         )
         row = await cursor.fetchone()
-        return row["title"] if row else "this episode"
+        if not row:
+            return "this episode", ""
+        return row["title"], shownotes.to_text(row["description"])
     finally:
         await db.close()
+
+
+def _notes_block(notes: str) -> str:
+    """Label the notes so the model does not confuse them with what was said."""
+    if not notes:
+        return ""
+    return (
+        "Show notes for this episode (written by the publisher, not spoken in "
+        f"the audio — use them for names, links and references):\n{notes}\n\n"
+    )
 
 
 @router.get("/{episode_id}")
@@ -76,12 +94,13 @@ async def init_chat(episode_id: str):
             return dict(existing)
 
         transcript = await get_transcript(episode_id)
-        title = await get_episode_title(episode_id)
+        title, notes = await get_episode_context(episode_id)
 
         prompt = (
             f'You are a helpful podcast assistant for the episode "{title}". '
             f'Summarize the 3-4 key insights from this episode as bullet points, '
             f'then invite the user to ask questions. Be concise.\n\n'
+            f'{_notes_block(notes)}'
             f'Full transcript:\n{transcript}'
         )
         content = await llm_call(prompt)
@@ -107,6 +126,7 @@ async def send_message(episode_id: str, body: MessageBody):
     db = await get_db()
     try:
         transcript = await get_transcript(episode_id)
+        title, notes = await get_episode_context(episode_id)
         cursor = await db.execute(
             "SELECT role, content FROM episode_chats "
             "WHERE episode_id = ? ORDER BY created_at ASC",
@@ -121,8 +141,10 @@ async def send_message(episode_id: str, body: MessageBody):
             history_text += f"{label}: {t['content']}\n\n"
 
         prompt = (
-            f"You are a helpful podcast assistant. Answer questions based on the transcript below. "
-            f"Be concise and conversational. If something is not covered in the transcript, say so.\n\n"
+            f'You are a helpful podcast assistant for the episode "{title}". '
+            f"Answer using the show notes and transcript below. Be concise and "
+            f"conversational. If something is covered in neither, say so.\n\n"
+            f"{_notes_block(notes)}"
             f"Full transcript:\n{transcript}\n\n"
             f"Conversation so far:\n{history_text}"
             f"User: {body.message}\n\nAssistant:"

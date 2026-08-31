@@ -33,6 +33,12 @@ class Episode(BaseModel):
     chapters_status: str = "none"  # none | processing | done | error
 
 
+class Tag(BaseModel):
+    id: str
+    name: str
+    podcast_count: int = 0
+
+
 class Subscription(BaseModel):
     podcast_id: str
     feed_url: str
@@ -40,6 +46,7 @@ class Subscription(BaseModel):
     image_url: Optional[str] = None
     last_checked: Optional[datetime] = None
     subscribed_at: datetime
+    tags: list[Tag] = []
 
 
 class TranscriptWord(BaseModel):

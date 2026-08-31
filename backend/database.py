@@ -96,6 +96,37 @@ CREATE TABLE IF NOT EXISTS chapters (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chapters_episode ON chapters(episode_id, start_time);
+
+-- User-assigned tags on subscriptions ("tech", "français", "long-form", ...).
+-- Server-side rather than local storage so a library organised on the phone is
+-- the same library on the laptop.
+CREATE TABLE IF NOT EXISTS tags (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+-- Case-insensitive uniqueness: "Tech" and "tech" are one tag, not two.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_name ON tags(name COLLATE NOCASE);
+
+CREATE TABLE IF NOT EXISTS podcast_tags (
+    podcast_id TEXT NOT NULL,
+    tag_id     TEXT NOT NULL,
+    PRIMARY KEY (podcast_id, tag_id),
+    FOREIGN KEY (podcast_id) REFERENCES subscriptions(podcast_id),
+    FOREIGN KEY (tag_id)     REFERENCES tags(id)
+);
+CREATE INDEX IF NOT EXISTS idx_podcast_tags_tag ON podcast_tags(tag_id);
+
+-- Full-text index over transcript text, for searching what was actually said.
+-- `remove_diacritics 2` folds accents, so "retro" finds "rétro-ingénierie" —
+-- essential when half the library is French and nobody types accents into a
+-- search box. Kept as a plain table rather than an external-content one so a
+-- transcript rewrite is a simple delete-then-insert.
+CREATE VIRTUAL TABLE IF NOT EXISTS transcripts_fts USING fts5(
+    episode_id UNINDEXED,
+    text,
+    tokenize = 'unicode61 remove_diacritics 2'
+);
 """
 
 async def get_db() -> aiosqlite.Connection:
@@ -136,10 +167,50 @@ async def init_db():
         await db.commit()
 
         await _migrate_unsafe_episode_ids(db)
+        await _backfill_transcript_index(db)
+
+
+async def index_transcript(db, episode_id: str, words_json: str) -> None:
+    """(Re)index one transcript for full-text search.
+
+    Called on every transcript write. Delete-then-insert so re-transcribing an
+    episode replaces its index rather than duplicating every hit.
+    """
+    try:
+        words = json.loads(words_json)
+    except (TypeError, ValueError):
+        return
+    text = "".join(w.get("word", "") for w in words).strip()
+    await db.execute("DELETE FROM transcripts_fts WHERE episode_id = ?", (episode_id,))
+    if text:
+        await db.execute(
+            "INSERT INTO transcripts_fts (episode_id, text) VALUES (?, ?)",
+            (episode_id, text),
+        )
+
+
+async def _backfill_transcript_index(db) -> None:
+    """Index transcripts stored before the FTS table existed."""
+    rows = await db.execute_fetchall(
+        """SELECT t.episode_id, t.words_json FROM transcripts t
+           WHERE t.episode_id NOT IN (SELECT episode_id FROM transcripts_fts)"""
+    )
+    if not rows:
+        return
+    # init_db uses a bare connection, so rows are tuples rather than sqlite3.Row.
+    for episode_id, words_json in rows:
+        await index_transcript(db, episode_id, words_json)
+    await db.commit()
+    log.info("indexed %d transcript(s) for full-text search", len(rows))
 
 
 # Tables whose episode_id points at episodes.id; all must move together.
-_EPISODE_CHILD_TABLES = ("transcripts", "gists", "episode_chats", "researches", "chapters")
+# transcripts_fts is included so a rename cannot orphan the search index. Today
+# the id migration runs before the index is backfilled, but that ordering is not
+# something a future change should have to remember.
+_EPISODE_CHILD_TABLES = (
+    "transcripts", "gists", "episode_chats", "researches", "chapters", "transcripts_fts",
+)
 
 
 async def _migrate_unsafe_episode_ids(db) -> None:

@@ -104,6 +104,9 @@ class TestMigration:
                 await db.execute(
                     "INSERT INTO chapters (id, episode_id, title, start_time)"
                     " VALUES (?,?,'c',0.0)", (f"ch-{eid}", eid))
+                await db.execute(
+                    "INSERT INTO transcripts_fts (episode_id, text) VALUES (?, 'hello world')",
+                    (eid,))
             await db.commit()
 
             await database._migrate_unsafe_episode_ids(db)
@@ -114,7 +117,7 @@ class TestMigration:
             assert new_id in ids
             assert good in ids, "already-safe id must be left alone"
 
-            for table in ("transcripts", "chapters"):
+            for table in ("transcripts", "chapters", "transcripts_fts"):
                 moved = await db.execute_fetchall(
                     f"SELECT COUNT(*) FROM {table} WHERE episode_id = ?", (new_id,))
                 orphan = await db.execute_fetchall(

@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
-import { getSubscriptions, getEpisodes, unsubscribe, Subscription, Episode } from "../api/client";
+import { getSubscriptions, getEpisodes, unsubscribe, Subscription, Episode, Tag } from "../api/client";
 import { getCached, setCached, bustCache } from "../cache";
+import TagEditor from "../components/TagEditor";
+import EpisodeListFilter, { filterEpisodes } from "../components/EpisodeListFilter";
 
 const TrashIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
@@ -34,12 +36,17 @@ function fmtDuration(secs?: number | null) {
 
 // ─── Episode List View ────────────────────────────────────────────────────────
 function EpisodeList({ sub, onUnsubscribed }: { sub: Subscription; onUnsubscribed: () => void }) {
+  const [tags, setTags] = useState<Tag[]>(sub.tags ?? []);
   const nav = useNavigate();
   const cacheKey = `episodes:${sub.podcast_id}`;
   const [episodes, setEpisodes] = useState<Episode[]>(() => getCached<Episode[]>(cacheKey) || []);
   const [loading, setLoading] = useState(() => !getCached(cacheKey));
   const [refreshing, setRefreshing] = useState(false);
   const [unsubbing, setUnsubbing] = useState(false);
+  const [q, setQ] = useState("");
+  const [status, setStatus] = useState("");
+
+  const visible = filterEpisodes(episodes, q, status);
 
   const loadEpisodes = async (forceRefresh = false) => {
     if (forceRefresh) setRefreshing(true);
@@ -111,6 +118,12 @@ function EpisodeList({ sub, onUnsubscribed }: { sub: Subscription; onUnsubscribe
         </button>
       </div>
 
+      <TagEditor
+        podcastId={sub.podcast_id}
+        value={tags}
+        onChange={setTags}
+      />
+
       {/* Loading skeletons */}
       {loading && (
         <div className="space-y-2 pt-1">
@@ -120,13 +133,33 @@ function EpisodeList({ sub, onUnsubscribed }: { sub: Subscription; onUnsubscribe
         </div>
       )}
 
+      {!loading && episodes.length > 0 && (
+        <EpisodeListFilter
+          q={q}
+          status={status}
+          onChange={(nq, ns) => { setQ(nq); setStatus(ns); }}
+          shown={visible.length}
+          total={episodes.length}
+        />
+      )}
+
       {/* Empty */}
       {!loading && episodes.length === 0 && (
         <p className="text-gray-500 text-sm text-center pt-8">No episodes found.</p>
       )}
 
+      {!loading && episodes.length > 0 && visible.length === 0 && (
+        <div className="text-center pt-8 space-y-2">
+          <p className="text-gray-500 text-sm">No episodes match.</p>
+          <button onClick={() => { setQ(""); setStatus(""); }}
+            className="text-indigo-400 hover:text-indigo-300 text-sm min-h-[44px] px-3">
+            Clear filters
+          </button>
+        </div>
+      )}
+
       {/* Episode rows */}
-      {!loading && episodes.map(ep => (
+      {!loading && visible.map(ep => (
         <div
           key={ep.id}
           onClick={() => nav(`/player/${ep.id}`, { state: { ...ep, podcast_image: sub.image_url, podcast_title: sub.title } })}
