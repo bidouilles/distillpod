@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getFeed, getTags, getProgress, refreshSubscriptions, getRefreshStatus, FeedEpisode, Tag, ProgressRecord } from "../api/client";
 import ContinueListening from "../components/ContinueListening";
+import { clearProgress } from "../context/AudioContext";
 import { getCached, setCached } from "../cache";
 import FeedFilterBar, { FeedFilterState, EMPTY_FILTERS, hasActiveFilters } from "../components/FeedFilterBar";
 
@@ -279,7 +280,13 @@ export default function Home() {
         </div>
       )}
 
-      <ContinueListening records={progress} />
+      <ContinueListening
+        records={progress}
+        onDismiss={(episodeId) => {
+          clearProgress(episodeId);
+          setProgress(prev => prev.filter(r => r.episode_id !== episodeId));
+        }}
+      />
 
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-bold">Latest Episodes</h1>

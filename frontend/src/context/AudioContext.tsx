@@ -47,7 +47,13 @@ function writeProgress(id: string, time: number, dur: number, ep: PlayableEpisod
   sync(id, { position: time, duration: dur });
 }
 
-function clearProgress(id: string) {
+/** Forget where you were in an episode, without forgetting you opened it.
+ *
+ *  Resets the position rather than deleting the row: `played` drives the
+ *  "unplayed" feed filter, and dismissing a half-finished episode should not
+ *  make it look untouched. Syncing a zero also carries the dismissal to your
+ *  other devices, where hydration drops the local copy in turn. */
+export function clearProgress(id: string) {
   try {
     const map = readProgress();
     delete map[id];
