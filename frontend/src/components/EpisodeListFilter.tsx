@@ -65,7 +65,7 @@ export default function EpisodeListFilter({
         )}
       </div>
 
-      <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-4 px-4 scrollbar-none">
+      <div className="flex gap-1.5 overflow-x-auto py-1 -mx-4 px-4 scrollbar-none">
         {STATUSES.map(s => (
           <Chip key={s.key} active={status === s.key}
             onClick={() => onChange(q, status === s.key ? "" : s.key)}>

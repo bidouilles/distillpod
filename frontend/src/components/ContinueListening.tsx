@@ -41,7 +41,7 @@ export default function ContinueListening({
       </h2>
       {/* Horizontal rail: it is a shortcut, not the main feed, so it should
           cost one row of height on a phone rather than a screenful. */}
-      <div className="flex gap-3 overflow-x-auto -mx-4 px-4 pb-1 snap-x snap-mandatory">
+      <div className="flex gap-3 overflow-x-auto -mx-4 px-4 py-1 snap-x snap-mandatory scrollbar-none">
         {items.map(r => {
           const pct = r.duration && r.duration > 0
             ? Math.min(100, (r.position / r.duration) * 100)

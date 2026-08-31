@@ -123,7 +123,7 @@ export default function FeedFilterBar({
       {/* First row: what you reach for most — how much time you have, and
           whether you have heard it. One scroll row keeps the feed above the
           fold on a phone; everything rarer is behind "More". */}
-      <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-4 px-4 scrollbar-none">
+      <div className="flex gap-1.5 overflow-x-auto py-1 -mx-4 px-4 scrollbar-none">
         <Chip active={filters.unplayedOnly} onClick={() => set({ unplayedOnly: !filters.unplayedOnly })}>
           Unplayed
         </Chip>
@@ -149,7 +149,7 @@ export default function FeedFilterBar({
 
       {more && (
         <div className="space-y-2 pt-0.5">
-          <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-4 px-4 scrollbar-none">
+          <div className="flex gap-1.5 overflow-x-auto py-1 -mx-4 px-4 scrollbar-none">
             {STATUSES.map(s => (
               <Chip key={s.key} active={filters.status === s.key}
                 onClick={() => set({ status: filters.status === s.key ? "" : s.key })}>
@@ -157,7 +157,7 @@ export default function FeedFilterBar({
               </Chip>
             ))}
           </div>
-          <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-4 px-4 scrollbar-none items-center">
+          <div className="flex gap-1.5 overflow-x-auto py-1 -mx-4 px-4 scrollbar-none items-center">
             <span className="text-[11px] text-gray-500 uppercase tracking-wider font-semibold flex-shrink-0 pr-1">
               Order
             </span>

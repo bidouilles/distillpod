@@ -51,3 +51,20 @@ body { background: #030712; color: white; }
     font-size: 16px !important;
   }
 }
+
+/* A horizontally scrolling row with no visible scrollbar.
+   Four components ask for this class and nothing defined it, which was not
+   merely cosmetic. `overflow-x: auto` also forces `overflow-y` to compute as
+   `auto`, and where the platform draws classic scrollbars rather than overlay
+   ones — macOS with "Show scroll bars: Always", most Linux setups, Windows —
+   the horizontal bar takes ~15px out of the content box. The filter rows are
+   sized to the 36px chip they hold, so the chips were being shaved off. */
+.scrollbar-none {
+  scrollbar-width: none;          /* Firefox */
+  -ms-overflow-style: none;       /* old Edge */
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;                  /* Chrome, Safari */
+  width: 0;
+  height: 0;
+}
