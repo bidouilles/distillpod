@@ -354,6 +354,13 @@ async def main() -> None:
 
     total = {"new": 0, "downloaded": 0, "transcribed": 0, "skipped": 0}
     for sub in subs:
+        # A YouTube channel is a subscription only so the feed has something to
+        # join against — videos are added one at a time, on purpose. Its RSS
+        # carries no audio enclosures, so syncing it would fetch a feed every
+        # night to find nothing.
+        if sub["podcast_id"].startswith("yt-"):
+            log.info(f"⏭ {sub['title']} (YouTube channel — videos are added manually)")
+            continue
         result = await process_subscription(
             sub["podcast_id"], sub["feed_url"], sub["title"]
         )

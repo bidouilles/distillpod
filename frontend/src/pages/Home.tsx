@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getFeed, getTags, FeedEpisode, Tag } from "../api/client";
+import { getFeed, getTags, getProgress, FeedEpisode, Tag, ProgressRecord } from "../api/client";
+import ContinueListening from "../components/ContinueListening";
 import { getCached, setCached } from "../cache";
 import FeedFilterBar, { FeedFilterState, EMPTY_FILTERS, hasActiveFilters } from "../components/FeedFilterBar";
 
@@ -137,6 +138,7 @@ export default function Home() {
   const [noSubs, setNoSubs] = useState(false);
   const [filters, setFilters] = useState<FeedFilterState>(EMPTY_FILTERS);
   const [tags, setTags] = useState<Tag[]>([]);
+  const [progress, setProgress] = useState<ProgressRecord[]>([]);
 
   const filtering = hasActiveFilters(filters);
 
@@ -174,6 +176,22 @@ export default function Home() {
 
   useEffect(() => { getTags().then(setTags).catch(() => {}); }, []);
 
+  // Playback state lives on the server, so read it from there rather than
+  // trusting this device's localStorage: an episode finished on the phone has
+  // to count as played here too, or the "unplayed" filter quietly lies.
+  useEffect(() => {
+    getProgress()
+      .then(records => {
+        setProgress(records);
+        setPlayed(prev => {
+          const merged = new Set(prev);
+          records.forEach(r => { if (r.played) merged.add(r.episode_id); });
+          return merged;
+        });
+      })
+      .catch(() => {});
+  }, []);
+
   const applyFilters = (f: FeedFilterState) => {
     setFilters(f);
     setLoading(true);
@@ -204,6 +222,8 @@ export default function Home() {
 
   return (
     <div className="space-y-3">
+      <ContinueListening records={progress} />
+
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-bold">Latest Episodes</h1>
         <button

@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from "react";
+import LiveTranscript from "./LiveTranscript";
 import { useAudio } from "../context/AudioContext";
 import {
   getTranscriptStatus, getAdFreeStatus, getChapters, createGist,
@@ -17,11 +18,17 @@ function fmtTime(secs: number) {
 }
 
 // ─── Transcript badge ──────────────────────────────────────────────────────────
-function TranscriptBadge({ status }: { status: string }) {
+function TranscriptBadge({ status, onOpen }: { status: string; onOpen: () => void }) {
+  // A ready transcript is the entry point to reading along, so the badge that
+  // announces it is the control that opens it — no second affordance competing
+  // for room next to the playback controls.
   if (status === "done") return (
-    <span className="inline-flex items-center gap-1 text-xs bg-white/10 text-green-300 px-2.5 py-1 rounded-full">
-      ✓ Transcript ready
-    </span>
+    <button
+      onClick={onOpen}
+      className="inline-flex items-center gap-1.5 text-xs bg-white/10 hover:bg-white/20 text-green-300 px-3 py-1.5 rounded-full transition-colors"
+    >
+      ✓ Read along
+    </button>
   );
   if (status === "error") return (
     <span className="inline-flex items-center gap-1 text-xs bg-white/10 text-red-300 px-2.5 py-1 rounded-full">
@@ -53,6 +60,7 @@ export default function FullscreenPlayer() {
   const [useAdFree, setUseAdFree]         = useState(false);
   const [chaptersData, setChaptersData]   = useState<ChaptersResult | null>(null);
   const [chaptersOpen, setChaptersOpen]   = useState(false);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
   // Gist state
   const [gisting, setGisting]             = useState(false);
   const [gistFlash, setGistFlash]         = useState(false);
@@ -85,6 +93,7 @@ export default function FullscreenPlayer() {
       if (playerExpanded) {
         setPlayerExpanded(false);
         setChaptersOpen(false);
+        setTranscriptOpen(false);
       }
     };
     window.addEventListener('popstate', onPopState);
@@ -100,6 +109,7 @@ export default function FullscreenPlayer() {
     setAdFreeStatus(null);
     setChaptersData(null);
     setChaptersOpen(false);
+    setTranscriptOpen(false);
     setError("");
     setGistCreated(false);
 
@@ -453,7 +463,7 @@ export default function FullscreenPlayer() {
 
             {/* ── Transcript badge ── */}
             <div className="flex justify-center pb-2">
-              <TranscriptBadge status={transcriptStatus} />
+              <TranscriptBadge status={transcriptStatus} onOpen={() => { setChaptersOpen(false); setTranscriptOpen(true); }} />
             </div>
           </div>
         </div>
@@ -466,10 +476,16 @@ export default function FullscreenPlayer() {
           />
         )}
 
-        {/* ── Chapters sheet — outside scroll container, covers all controls ── */}
+        {/* ── Chapters sheet — outside scroll container, covers all controls ──
+            Hidden with opacity and pointer-events as well as a translate.
+            `translate-y-full` shifts a sheet by its own height, which clears
+            the screen only while this root is unscrolled; with few or no
+            chapters this one is a ~90px header, so it has very little room to
+            spare. Cheap insurance against it becoming a dead bar over the
+            bottom nav. */}
         <div
-          className={`absolute inset-x-0 bottom-0 z-20 bg-gray-950 rounded-t-3xl transition-transform duration-300 ease-out max-h-[70vh] flex flex-col ${
-            chaptersOpen ? "translate-y-0" : "translate-y-full"
+          className={`absolute inset-x-0 bottom-0 z-20 bg-gray-950 rounded-t-3xl transition-all duration-300 ease-out max-h-[70vh] flex flex-col ${
+            chaptersOpen ? "translate-y-0" : "translate-y-full opacity-0 pointer-events-none"
           }`}
           style={{ paddingBottom: "max(env(safe-area-inset-bottom), 16px)" }}
         >
@@ -481,9 +497,10 @@ export default function FullscreenPlayer() {
             <span className="text-sm font-bold text-white">Chapters ({chapters.length})</span>
             <button
               onClick={() => setChaptersOpen(false)}
-              className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white transition-colors text-lg leading-none"
+              aria-label="Close chapters"
+              className="-mr-2 w-11 h-11 flex items-center justify-center text-gray-400 hover:text-white transition-colors"
             >
-              ×
+              <span className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-800 text-lg leading-none">×</span>
             </button>
           </div>
           <div className="overflow-y-auto divide-y divide-gray-800/40">
@@ -511,6 +528,54 @@ export default function FullscreenPlayer() {
               </button>
             ))}
           </div>
+        </div>
+
+        {/* ── Transcript backdrop ── */}
+        {transcriptOpen && (
+          <div
+            className="absolute inset-0 z-10 bg-black/60"
+            onClick={() => setTranscriptOpen(false)}
+          />
+        )}
+
+        {/* ── Read-along transcript ──
+            Taller than the chapters sheet: this one is meant to be read for
+            minutes at a time, not glanced at and dismissed. */}
+        <div
+          className={`absolute inset-x-0 bottom-0 z-20 bg-gray-950 rounded-t-3xl transition-all duration-300 ease-out h-[85vh] flex flex-col ${
+            transcriptOpen ? "translate-y-0" : "translate-y-full opacity-0 pointer-events-none"
+          }`}
+          style={{ paddingBottom: "max(env(safe-area-inset-bottom), 8px)" }}
+        >
+          <div className="flex justify-center pt-3 pb-1 flex-shrink-0">
+            <div className="w-10 h-1 bg-white/20 rounded-full" />
+          </div>
+          <div className="flex items-center justify-between px-5 py-3 border-b border-gray-800/60 flex-shrink-0">
+            <div className="min-w-0">
+              <div className="text-sm font-bold text-white">Transcript</div>
+              <div className="text-[11px] text-white/40">Tap any line to jump there</div>
+            </div>
+            <button
+              onClick={() => setTranscriptOpen(false)}
+              aria-label="Close transcript"
+              className="-mr-2 w-11 h-11 flex-shrink-0 flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+            >
+              <span className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-800 text-lg leading-none">×</span>
+            </button>
+          </div>
+          {/* Stays mounted across open/close so the transcript is fetched once
+              per episode rather than on every reopen — it is ~190KB for a long
+              episode, and this is a phone. Nothing runs while closed: the
+              fetch waits for the first open and the animation frame loop is
+              gated on `open`. */}
+          {episode?.id && (
+            <LiveTranscript
+              episodeId={episode.id}
+              audioRef={audioRef}
+              open={transcriptOpen}
+              onSeek={(secs) => { const a = audioRef.current; if (a) a.currentTime = secs; }}
+            />
+          )}
         </div>
       </div>
   );

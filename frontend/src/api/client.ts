@@ -208,3 +208,61 @@ export interface ChaptersResult {
 
 export const getChapters = (episodeId: string) =>
   req<ChaptersResult>('GET', `/player/chapters/${episodeId}`);
+
+// --- YouTube ---
+// A video is ingested as an ordinary episode, so nothing else in the client
+// needs to know it came from YouTube.
+export interface YouTubeAddResult {
+  episode_id: string;
+  podcast_id: string;
+  title: string;
+  channel?: string;
+  image_url?: string;
+  duration_seconds?: number;
+  chapters?: number;
+  has_captions?: boolean;
+  already_added: boolean;
+}
+
+export const addYoutubeVideo = (url: string) =>
+  req<YouTubeAddResult>("POST", "/youtube/add", { url });
+
+// --- Read-along transcript ---
+// [start, end, text] triples rather than objects: an hour of speech is ~10k
+// words, and repeating three JSON keys on each roughly doubles the payload.
+export type TranscriptWord = [number, number, string];
+
+export interface TranscriptResult {
+  episode_id: string;
+  language?: string;
+  words: TranscriptWord[];
+}
+
+export const getTranscript = (episodeId: string) =>
+  req<TranscriptResult>("GET", `/player/transcript/${episodeId}`);
+
+// --- Playback progress (cross-device resume) ---
+// Server-side so an episode started on the phone resumes on the laptop. The
+// client keeps a localStorage copy for instant, offline reads; this is the
+// copy the devices agree on.
+export interface ProgressRecord {
+  episode_id: string;
+  position: number;
+  duration?: number;
+  played: boolean;
+  updated_at: string;
+  title?: string | null;
+  podcast_title?: string | null;
+  podcast_image?: string | null;
+}
+
+export const getProgress = () =>
+  req<ProgressRecord[]>("GET", "/player/progress");
+
+export const putProgress = (
+  episodeId: string,
+  body: { position?: number; duration?: number; played?: boolean },
+) => req<{ episode_id: string; updated_at: string }>("PUT", `/player/progress/${episodeId}`, body);
+
+export const deleteProgress = (episodeId: string) =>
+  req("DELETE", `/player/progress/${episodeId}`);

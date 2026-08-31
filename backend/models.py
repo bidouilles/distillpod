@@ -87,6 +87,18 @@ class PlayRequest(BaseModel):
     audio_url: str                # original RSS audio URL
 
 
+class ProgressUpdate(BaseModel):
+    """Every field optional: callers update position, finishedness, or both.
+
+    Saving a position and marking an episode finished are separate events —
+    one fires every few seconds while listening, the other once at the end —
+    so neither should have to restate the other and risk overwriting it.
+    """
+    position: Optional[float] = None
+    duration: Optional[float] = None
+    played: Optional[bool] = None
+
+
 class TranscriptStatus(BaseModel):
     episode_id: str
     status: str                   # none | queued | processing | done | error

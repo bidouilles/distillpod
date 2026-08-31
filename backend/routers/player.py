@@ -1,7 +1,9 @@
 import asyncio
+import json
+from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
-from models import PlayRequest, TranscriptStatus, Episode
+from models import PlayRequest, ProgressUpdate, TranscriptStatus, Episode
 from services.downloader import download_episode, episode_local_path
 from services.transcriber import transcribe_episode
 from database import get_db
@@ -157,6 +159,139 @@ async def stream_adfree(episode_id: str):
         return FileResponse(str(file_path), media_type='audio/mpeg')
     finally:
         await db.close()
+
+
+@router.get("/progress")
+async def list_progress():
+    """Every episode you have started or finished.
+
+    Fetched once when the app loads, so the device you pick up knows where the
+    device you put down had got to. Joins the episode and podcast so a device
+    that has never seen an episode can still render it in "Continue listening"
+    — a fresh phone has no local copy of the title or artwork.
+    """
+    db = await get_db()
+    try:
+        rows = await db.execute_fetchall(
+            """SELECT p.episode_id, p.position, p.duration, p.played, p.updated_at,
+                      e.title, e.image_url,
+                      s.title AS podcast_title, s.image_url AS podcast_image
+               FROM playback p
+               LEFT JOIN episodes e      ON e.id = p.episode_id
+               LEFT JOIN subscriptions s ON s.podcast_id = e.podcast_id
+               ORDER BY p.updated_at DESC"""
+        )
+        return [
+            {
+                "episode_id": r["episode_id"],
+                "position": r["position"],
+                "duration": r["duration"],
+                "played": bool(r["played"]),
+                "updated_at": r["updated_at"],
+                "title": r["title"],
+                "podcast_title": r["podcast_title"],
+                "podcast_image": r["podcast_image"] or r["image_url"],
+            }
+            for r in rows
+        ]
+    finally:
+        await db.close()
+
+
+@router.put("/progress/{episode_id}")
+async def save_progress(episode_id: str, update: ProgressUpdate):
+    """Upsert a position and/or a finished flag.
+
+    Only the fields present are written, so the every-few-seconds position
+    save cannot clear the finished flag, and marking an episode finished
+    cannot rewind it.
+    """
+    sets, params = [], []
+    if update.position is not None:
+        sets.append("position = ?")
+        params.append(max(0.0, update.position))
+    if update.duration is not None:
+        sets.append("duration = ?")
+        params.append(max(0.0, update.duration))
+    if update.played is not None:
+        sets.append("played = ?")
+        params.append(1 if update.played else 0)
+    if not sets:
+        raise HTTPException(400, "Nothing to update")
+
+    now = datetime.now(timezone.utc).isoformat()
+    db = await get_db()
+    try:
+        await db.execute(
+            f"""INSERT INTO playback (episode_id, position, duration, played, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(episode_id) DO UPDATE SET
+                  {", ".join(sets)}, updated_at = excluded.updated_at""",
+            (episode_id,
+             max(0.0, update.position or 0.0),
+             update.duration,
+             1 if update.played else 0,
+             now,
+             *params),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    return {"episode_id": episode_id, "updated_at": now}
+
+
+@router.delete("/progress/{episode_id}")
+async def delete_progress(episode_id: str):
+    """Forget an episode entirely — neither started nor finished."""
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM playback WHERE episode_id = ?", (episode_id,))
+        await db.commit()
+    finally:
+        await db.close()
+    return {"status": "cleared"}
+
+
+@router.get("/transcript/{episode_id}")
+async def get_transcript(episode_id: str):
+    """The whole transcript, for reading along while the audio plays.
+
+    Encoded as [start, end, text] triples rather than objects: an hour of
+    speech is ~10k words, and repeating three JSON keys on every one of them
+    roughly doubles the payload for no added meaning. Times are rounded to
+    10ms, which is finer than a spoken word boundary can be heard anyway.
+
+    Sent whole rather than windowed. The client needs to scroll the entire
+    transcript, and a range endpoint would turn one cached fetch per episode
+    into a request every few seconds of playback.
+    """
+    db = await get_db()
+    try:
+        row = await db.execute_fetchone(
+            "SELECT words_json, language FROM transcripts WHERE episode_id = ?",
+            (episode_id,),
+        )
+    finally:
+        await db.close()
+
+    if not row:
+        raise HTTPException(404, "No transcript for this episode")
+
+    try:
+        words = json.loads(row["words_json"])
+    except (TypeError, ValueError):
+        raise HTTPException(500, "Stored transcript is not readable")
+
+    return {
+        "episode_id": episode_id,
+        "language": row["language"],
+        "words": [
+            [round(float(w.get("start", 0)), 2),
+             round(float(w.get("end", 0)), 2),
+             w.get("word", "")]
+            for w in words
+        ],
+    }
 
 
 @router.get("/chapters/{episode_id}")
