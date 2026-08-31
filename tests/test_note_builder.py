@@ -199,3 +199,112 @@ class TestBrief:
         with patch.object(nb.llm, "run_json") as run:
             assert nb.brief("[]", "t") is None
         assert not run.called
+
+
+# ── Backfill: the cost constraint is the whole point ─────────────────────────
+
+@pytest.mark.asyncio
+class TestBackfillNeverTranscribes:
+    """A backfill spans the whole back catalogue. Routing that through a paid
+    speech-to-text backend could cost a great deal unannounced, so it must use
+    captions and nothing else."""
+
+    async def _episodes(self, tmp_db, rows):
+        import sqlite3
+        conn = sqlite3.connect(tmp_db)
+        conn.execute(
+            "INSERT OR IGNORE INTO subscriptions (podcast_id, feed_url, title, subscribed_at, source)"
+            " VALUES ('yt-UCx', 'u', 'Chan', '2026-01-01T00:00:00', 'youtube_channel')")
+        for eid, url, status in rows:
+            conn.execute(
+                "INSERT OR REPLACE INTO episodes (id, podcast_id, title, audio_url, transcript_status,"
+                " published_at) VALUES (?, 'yt-UCx', ?, ?, ?, '2026-08-01T00:00:00')",
+                (eid, f"Title {eid}", url, status))
+        conn.commit(); conn.close()
+
+    async def test_a_video_without_captions_is_skipped_not_transcribed(self, client, tmp_db):
+        from services import backfill, youtube
+        from unittest.mock import AsyncMock, patch
+        await self._episodes(tmp_db, [("yt-aaa", "https://youtu.be/aaa", "none")])
+
+        with patch.object(youtube, "fetch_metadata", AsyncMock(return_value={"id": "aaa"})), \
+             patch.object(youtube, "fetch_caption_words", AsyncMock(return_value=[])), \
+             patch("services.stt.transcribe") as stt, \
+             patch("services.transcriber.transcribe_episode", AsyncMock()) as stt_episode, \
+             patch.object(backfill, "REQUEST_SPACING_SECONDS", 0):
+            await backfill.run()
+
+        assert backfill.status()["no_captions"] == 1
+        assert backfill.status()["transcribed"] == 0
+        assert not stt.called and not stt_episode.called   # never speech-to-text
+
+    async def test_captions_are_stored_when_present(self, client, tmp_db):
+        from services import backfill, youtube
+        from unittest.mock import AsyncMock, patch
+        await self._episodes(tmp_db, [("yt-bbb", "https://youtu.be/bbb", "none")])
+        words = [{"word": "hello", "start": 0, "end": 1}]
+
+        with patch.object(youtube, "fetch_metadata", AsyncMock(return_value={"id": "bbb"})), \
+             patch.object(youtube, "fetch_caption_words", AsyncMock(return_value=words)), \
+             patch.object(youtube, "caption_language", return_value="en"), \
+             patch.object(backfill, "REQUEST_SPACING_SECONDS", 0):
+            await backfill.run()
+
+        assert backfill.status()["transcribed"] == 1
+        r = await client.get("/player/transcript/yt-bbb")
+        assert r.status_code == 200 and r.json()["words"]
+
+    async def test_podcast_episodes_are_never_touched(self, client, tmp_db):
+        """Only YouTube. A podcast has no captions, so it could only ever be
+        transcribed by the paid path this deliberately avoids."""
+        from services import backfill, youtube
+        from unittest.mock import AsyncMock, patch
+        await self._episodes(tmp_db, [("pod-1", "https://cdn.example.com/ep.mp3", "none")])
+
+        with patch.object(youtube, "fetch_metadata", AsyncMock()) as meta, \
+             patch.object(backfill, "REQUEST_SPACING_SECONDS", 0):
+            await backfill.run()
+        assert backfill.status()["total"] == 0
+        assert not meta.called
+
+    async def test_an_episode_with_no_subscription_is_skipped(self, client, tmp_db):
+        """It cannot be opened in the app, so spending requests on it is waste."""
+        import sqlite3
+        from services import backfill, youtube
+        from unittest.mock import AsyncMock, patch
+        conn = sqlite3.connect(tmp_db)
+        conn.execute("INSERT OR REPLACE INTO episodes (id, podcast_id, title, audio_url,"
+                     " transcript_status, published_at) VALUES"
+                     " ('yt-orphan', 'yt-gone', 'Orphan', 'https://youtu.be/x', 'none', '2026-08-01')")
+        conn.commit(); conn.close()
+
+        with patch.object(youtube, "fetch_metadata", AsyncMock()) as meta, \
+             patch.object(backfill, "REQUEST_SPACING_SECONDS", 0):
+            await backfill.run()
+        assert not meta.called
+
+    async def test_a_run_gives_up_once_youtube_starts_refusing(self, client, tmp_db):
+        """Carrying on past a wall of refusals earns a longer ban and
+        transcribes nothing."""
+        from services import backfill, youtube
+        from unittest.mock import AsyncMock, patch
+        rows = [(f"yt-{i:03}", f"https://youtu.be/{i:03}", "none") for i in range(12)]
+        await self._episodes(tmp_db, rows)
+
+        with patch.object(youtube, "fetch_metadata",
+                          AsyncMock(side_effect=youtube.YouTubeError("bot check"))) as meta, \
+             patch.object(backfill, "REQUEST_SPACING_SECONDS", 0):
+            await backfill.run()
+
+        assert backfill.status()["stopped_early"] is True
+        assert meta.await_count == backfill.CONSECUTIVE_FAILURE_LIMIT
+        assert backfill.status()["failed"] == backfill.CONSECUTIVE_FAILURE_LIMIT
+
+    async def test_already_transcribed_episodes_are_not_redone(self, client, tmp_db):
+        from services import backfill, youtube
+        from unittest.mock import AsyncMock, patch
+        await self._episodes(tmp_db, [("yt-ccc", "https://youtu.be/ccc", "done")])
+        with patch.object(youtube, "fetch_metadata", AsyncMock()) as meta, \
+             patch.object(backfill, "REQUEST_SPACING_SECONDS", 0):
+            await backfill.run()
+        assert not meta.called

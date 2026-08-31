@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import SourceBadge from "../components/SourceBadge";
+import BackfillCard from "../components/BackfillCard";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { getSubscriptions, getEpisodes, unsubscribe, Subscription, Episode, Tag } from "../api/client";
 import { getCached, setCached, bustCache } from "../cache";
@@ -237,6 +238,8 @@ export default function Subscriptions() {
           <p className="text-sm mt-1">Search for podcasts to get started.</p>
         </div>
       )}
+
+      <BackfillCard />
 
       {subs.map(s => (
         <div

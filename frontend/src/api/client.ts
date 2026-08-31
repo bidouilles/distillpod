@@ -321,3 +321,26 @@ export const refreshSubscriptions = () =>
 /** A refresh runs server-side, so it survives leaving the screen. */
 export const getRefreshStatus = () =>
   req<RefreshState>("GET", "/podcasts/refresh/status");
+
+// --- Transcript backfill (captions only, never speech-to-text) ---
+export interface BackfillState {
+  running: boolean;
+  total: number;
+  transcribed: number;
+  /** Videos with no captions — left alone rather than sent to a paid backend. */
+  no_captions: number;
+  failed: number;
+  current: string | null;
+  stopped_early: boolean;
+  finished_at: string | null;
+  pending: number;
+}
+
+export const getBackfillStatus = () =>
+  req<BackfillState>("GET", "/player/backfill/status");
+
+export const startBackfill = () =>
+  req<{ status: string; pending?: number }>("POST", "/player/backfill");
+
+export const stopBackfill = () =>
+  req<{ status: string }>("POST", "/player/backfill/stop");

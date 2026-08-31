@@ -362,6 +362,37 @@ async def get_transcript(episode_id: str):
     }
 
 
+@router.post("/backfill")
+async def start_backfill():
+    """Fill in transcripts for episodes that have none, from captions only.
+
+    Never runs speech-to-text: a backfill spans the whole back catalogue, and
+    routing that through a paid backend could cost a great deal unannounced.
+    Videos without captions are counted and skipped, and still transcribe on
+    first play — where it is one episode the listener chose.
+    """
+    from services import backfill
+    if backfill.status()["running"]:
+        return {"status": "already_running", **backfill.status()}
+    asyncio.create_task(backfill.run())
+    return {"status": "started", "pending": await backfill.pending_count()}
+
+
+@router.get("/backfill/status")
+async def backfill_status():
+    """Progress of a run, and how many episodes are still missing a transcript."""
+    from services import backfill
+    return {**backfill.status(), "pending": await backfill.pending_count()}
+
+
+@router.post("/backfill/stop")
+async def stop_backfill():
+    """Finish after the video in flight."""
+    from services import backfill
+    backfill.request_stop()
+    return {"status": "stopping"}
+
+
 @router.get("/brief/{episode_id}")
 async def episode_brief(episode_id: str):
     """What this episode is about, in a couple of lines.
