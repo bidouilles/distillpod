@@ -591,3 +591,34 @@ export const askLibrary = (message: string) =>
   req<AskMessage>("POST", "/ask", { message });
 
 export const clearAskHistory = () => req("DELETE", "/ask");
+
+// --- Meaning-based search index ---
+// Optional: with no embedding backend, Ask falls back to keyword retrieval and
+// everything else works unchanged.
+export interface SemanticIndexState {
+  /** "off" | "mistral" | "local" */
+  engine: string;
+  model: string;
+  transcribed: number;
+  indexed: number;
+  pending: number;
+  windows: number;
+  job: {
+    running: boolean;
+    total: number;
+    indexed: number;
+    failed: number;
+    current: string | null;
+    stopped_early: boolean;
+    finished_at: string | null;
+  };
+}
+
+export const getSemanticIndex = () =>
+  req<SemanticIndexState>("GET", "/search/index");
+
+export const buildSemanticIndex = () =>
+  req<{ status: string } & SemanticIndexState>("POST", "/search/index");
+
+export const stopSemanticIndex = () =>
+  req<{ status: string }>("POST", "/search/index/stop");

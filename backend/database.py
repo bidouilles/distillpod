@@ -194,6 +194,26 @@ CREATE TABLE IF NOT EXISTS playlist_items (
 );
 CREATE INDEX IF NOT EXISTS idx_playlist_items ON playlist_items(playlist_id, position);
 
+-- Meaning-based search over transcripts: one row per window of speech, with
+-- its embedding. Keyword search cannot find "they talked about burning out" if
+-- nobody said "burnout", and that is exactly the question people ask of a
+-- library. Kept in a plain table rather than a vector extension: a few thousand
+-- windows is a single pass over 12MB, and one fewer thing to install on a box
+-- that already needs ffmpeg, yt-dlp and a JS runtime.
+CREATE TABLE IF NOT EXISTS embeddings (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id  TEXT NOT NULL,
+    start_time  REAL NOT NULL,
+    end_time    REAL NOT NULL,
+    text        TEXT NOT NULL,
+    -- float32 little-endian, pre-normalised so a search is a dot product.
+    vector      BLOB NOT NULL,
+    model       TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    FOREIGN KEY (episode_id) REFERENCES episodes(id)
+);
+CREATE INDEX IF NOT EXISTS idx_embeddings_episode ON embeddings(episode_id);
+
 -- Questions asked of the whole library, and the answers. One conversation
 -- rather than one per episode: the point of it is that it crosses episodes.
 CREATE TABLE IF NOT EXISTS library_chats (
@@ -376,6 +396,7 @@ async def _backfill_transcript_index(db) -> None:
 _EPISODE_CHILD_TABLES = (
     "transcripts", "gists", "episode_chats", "researches", "chapters", "transcripts_fts",
     "playback", "episode_notes", "bookmarks", "queue", "playlist_items",
+    "embeddings",
 )
 
 

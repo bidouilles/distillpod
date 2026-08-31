@@ -1,7 +1,10 @@
 """Search inside the transcripts of episodes you already have."""
+import asyncio
+
 from fastapi import APIRouter
 
 from database import get_db
+from services import semantic_index
 from services.transcript_search import find_matches, fts_query
 
 router = APIRouter(prefix="/search", tags=["search"])
@@ -74,3 +77,37 @@ async def search_transcripts(q: str = "", limit: int = 20) -> list[dict]:
         return results
     finally:
         await db.close()
+
+
+@router.get("/index")
+async def index_status():
+    """How much of the library is searchable by meaning, and by what.
+
+    `engine: "off"` is a normal answer: with no embedding backend configured,
+    Ask falls back to keyword retrieval and everything else works unchanged.
+    """
+    return await semantic_index.coverage()
+
+
+@router.post("/index")
+async def build_index():
+    """Index every transcribed episode that has no windows yet.
+
+    Runs in the background and is polled, like the caption backfill: it walks the
+    whole library, and a request held open for that would time out long before
+    it finished.
+    """
+    if semantic_index.status()["running"]:
+        return {"status": "already_running", **await semantic_index.coverage()}
+    from services import embeddings
+    if not embeddings.available():
+        return {"status": "unavailable", **await semantic_index.coverage()}
+    asyncio.create_task(semantic_index.run())
+    return {"status": "started", **await semantic_index.coverage()}
+
+
+@router.post("/index/stop")
+async def stop_index():
+    """Finish after the episode in flight."""
+    semantic_index.request_stop()
+    return {"status": "stopping"}

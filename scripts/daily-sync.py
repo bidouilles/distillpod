@@ -390,6 +390,34 @@ async def reset_stale_processing() -> int:
         await db.close()
 
 
+async def index_new_transcripts() -> None:
+    """Embed any transcript that has no windows yet.
+
+    A no-op unless an embedding backend is configured *and* the library has
+    been indexed at least once by hand — embedding sends transcript text to a
+    hosted API, and a nightly job should not start doing that unasked. Episodes
+    transcribed on first play index themselves once that has happened; this
+    catches the ones the caption backfill filled in, which arrive without ever
+    passing through the player.
+    """
+    from services import embeddings, semantic_index
+    if not embeddings.available():
+        log.info(f"Semantic index: no embedding backend ({embeddings.engine()}) — skipping")
+        return
+    try:
+        result = await semantic_index.run(require_opt_in=True)
+    except Exception as exc:
+        log.warning(f"Semantic indexing failed: {exc}")
+        return
+    if result["total"]:
+        log.info(
+            f"Semantic index: {result['indexed']} episode(s) indexed, "
+            f"{result['failed']} failed"
+        )
+    else:
+        log.info("Semantic index: already up to date")
+
+
 async def prune_media() -> None:
     """Apply the retention policy, if one has been set.
 
@@ -497,6 +525,9 @@ async def main() -> None:
 
     # --- Fix 2: Report any episodes in error state via Telegram ---
     await report_errors()
+
+    # --- Keep the meaning-based index level with the transcripts ---
+    await index_new_transcripts()
 
     # --- Keep the disk from filling up ---
     await prune_media()

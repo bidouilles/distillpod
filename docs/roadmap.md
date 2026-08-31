@@ -6,7 +6,7 @@ _Compiled 2026-08-31 from a survey of [Metacast](https://metacast.app/features),
 checked line by line against what this fork already ships._
 
 > [!NOTE]
-> **Tier 1, Tier 2, 3.1 and parts of Tier 4/6 shipped on 2026-08-31** — entries below
+> **Tier 1, Tier 2, 3.1, 3.2 and parts of Tier 4/6 shipped on 2026-08-31** — entries below
 > are marked **✅ Shipped**. What went in: the server-side queue, bookmarks,
 > sleep timer, per-podcast playback settings, OPML, media retention, playlists
 > (manual and smart), inbox semantics, duration filters and sorting, and a
@@ -138,11 +138,13 @@ for a planned query like "model evals". Verified end to end through the real
 agent CLI in ~15s, including a French passage retrieved for an English
 question._
 
-### 3.2 Semantic search alongside keyword · M
-`transcript_search.py` is literal (accent-folded LIKE). Add embeddings over
-~60s transcript windows — sqlite-vec or a numpy blob, both fine at this scale —
-and keep keyword search as the exact-quote path. Keyword search cannot find
-"they talked about burning out" unless someone said those words.
+### 3.2 Semantic search alongside keyword · M — ✅ Shipped
+_Shipped 2026-08-31. Overlapping ~60s windows, embedded through a swappable
+backend (mistral / local / off), stored as float32 blobs and searched by a linear
+dot-product pass — no vector extension, and no numpy required on the box. Ask
+fuses the two retrieval paths by reciprocal rank. Building the index is opt-in,
+because the automatic backend would otherwise start sending transcript text to a
+hosted API on upgrade._
 
 ### 3.3 Weekly digest · S
 Telegram is already wired (`researcher.py`, `daily-sync.py`). Sunday morning: what
@@ -267,11 +269,7 @@ means VAPID keys and a service worker, so it pairs with 6.5.
 The original next-three (queue, bookmarks, retention) all shipped, along with the
 rest of Tier 1 and Tier 2. The ranking for what follows:
 
-1. **3.2 semantic search** — now the obvious next step rather than a nicety:
-   Ask depends entirely on retrieval, and prefix-matched keywords still miss
-   paraphrase ("they talked about burning out" finds nothing if nobody said
-   "burnout"). Embeddings over ~60s windows would feed the same pipeline.
-2. **3.4 entity/topic index** — the note builder already extracts `mentioned`
+1. **3.4 entity/topic index** — the note builder already extracts `mentioned`
    on every export; persisting those rows turns them into "every book mentioned
    across my library".
 

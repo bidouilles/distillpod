@@ -83,6 +83,14 @@ Measured on the same machine and clip with `medium`:
 | `mlx` (GPU) | 14.5x realtime | ~2 min |
 | `whisper` (CPU) | 1.79x realtime | ~15 min |
 
+**Embeddings (optional).** `EMBED_BACKEND=auto` uses `mistral-embed` when a
+`MISTRAL_API_KEY` is present, a local sentence-transformers model if one is
+installed, and otherwise stays `off` — which is a normal, fully working state.
+`off` keeps every transcript on the box; `mistral` sends window text to the same
+API Voxtral already uses. Indexing 26 episodes costs a fraction of a cent and a
+few seconds; searching is a linear pass over the vectors, which at a few
+thousand windows is milliseconds and needs no vector extension.
+
 **Very long episodes:** Voxtral accepts up to 3 hours per request, so anything
 longer is split into 1-hour pieces and stitched back onto one timeline
 automatically — a 5-hour Lex Fridman episode transcribes fine. Splitting costs
@@ -138,6 +146,7 @@ subscription either way.
 - **✂️ The clean cut** — after transcription the model classifies ad segments and ffmpeg cuts them out; where a podcast asks for it, the same pass also shortens long pauses and levels the loudness. Stream it from the player, which says what was removed ("1 ad · 4m 12s of pauses").
   The cut runs on its own clock, so the spans it keeps are stored as a map back to the original timeline and every timestamp is translated at the edges — see [`backend/services/timeline.py`](backend/services/timeline.py). Without that, a distill or bookmark taken while listening to the cut quoted a passage minutes from the one just heard, the read-along drifted, and chapter jumps landed in the wrong place. Pauses are shortened rather than closed: a beat of each one survives, because speech with every gap removed is exhausting and runs a question into its answer.
 - **📖 Chapters** — the model generates 4–10 named chapters with timestamps from the full transcript. Tap any chapter to jump directly.
+- **🧠 Search by meaning** — keyword search cannot find a passage about exhaustion, deadlines and resented work when the question says *burnout* and nobody used the word. Transcripts are cut into overlapping ~60s windows, embedded, and searched by vector; Ask fuses those hits with the keyword ones by reciprocal rank, so a passage both paths like wins and neither path's blind spot is fatal. Entirely optional: with no embedding backend, Ask works exactly as it did. Building the index is a deliberate press — `EMBED_BACKEND=auto` will use the Mistral key you already have for Voxtral, and that sends transcript *text* off the box, so it never starts on its own.
 - **🔎 Ask your library** — the question worth asking a library of three hundred episodes is the one that crosses them: *what have I heard about evaluating models?* Search → **Ask**. The model turns the question into keyword searches, the transcript index retrieves the passages, and the answer is written from those alone — with the episode and second behind every claim, so a citation can be tapped to hear it rather than taken on trust. Answers in ~15s over two agent-CLI calls. Only transcribed episodes are searched, and when nothing matches it says so instead of inventing an answer.
 - **💬 Episode chat** — ask questions about any transcribed episode. The model answers using the full transcript as context. History kept per episode (capped at 50 messages). Copy the whole conversation as Markdown or download it as a `.md` file from the chat header.
 - **📺 YouTube videos** — paste a link under Search → **YouTube** and the video joins your library as an ordinary episode: audio you can listen to, a word-level transcript, and every AI feature on top of it. Grouped under its channel, so videos filter and search like any show. See [YouTube videos](#youtube-videos).
@@ -431,6 +440,8 @@ Re-adding a video you already have is a no-op that returns the existing episode.
 | `backend/services/audio_processor.py` | Silence measurement + the ffmpeg cut, and the map it produces |
 | `backend/services/timeline.py` | Translating between the original audio and the clean cut |
 | `backend/services/librarian.py` | Retrieval + prompting for a library-wide question |
+| `backend/services/embeddings.py` | Text → vectors, through Mistral or a local model |
+| `backend/services/semantic_index.py` | Transcript windows, their vectors, and the search over them |
 | `backend/services/chapterizer.py` | Chapter + summary generation |
 | `backend/services/researcher.py` | Multi-turn research pipeline: model + Tavily → HTML report |
 | `backend/services/rss.py` | RSS feed parsing |

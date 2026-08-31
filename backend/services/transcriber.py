@@ -61,6 +61,17 @@ async def transcribe_episode(episode_id: str, audio_path: Path) -> None:
 
         words_json = await store_transcript(db, episode_id, words)
 
+        # ── Meaning-based search index ───────────────────────────────────────
+        # Straight after the transcript, so an episode is searchable by meaning
+        # as soon as it is searchable by word. Non-fatal and a no-op when no
+        # embedding backend is configured.
+        try:
+            from services import semantic_index
+            if await semantic_index.opted_in(db):
+                await semantic_index.index_episode(db, episode_id, words_json)
+        except Exception:
+            pass
+
         # ── The clean cut ────────────────────────────────────────────────────
         # Runs after the transcript is committed; failure is non-fatal, because
         # a missing clean cut degrades the episode while a lost transcript

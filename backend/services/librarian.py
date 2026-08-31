@@ -10,8 +10,12 @@ Three steps, in the order that keeps the expensive one small:
   1. Turn the question into keyword searches (one model call, tiny prompt).
      A question is prose; FTS5 matches words people actually said, and the
      question's own wording rarely matches the answer's.
-  2. Retrieve passages with the transcript index that already exists, ranked by
-     how many of those searches agree on them.
+  2. Retrieve passages two ways and fuse them: keyword search over the FTS
+     index, and — when an embedding backend is configured — meaning-based
+     search over the same transcripts. Neither alone is enough. Keywords cannot
+     find a passage about exhaustion and resented deadlines when the question
+     says "burnout" and nobody used the word; vectors cannot be trusted to find
+     a specific name or number, which keywords get exactly right.
   3. Answer from those passages only, citing them (one model call).
 
 The citations are the point as much as the answer. Every claim carries the
@@ -20,7 +24,7 @@ which is what makes this trustworthy in a way a summary of a summary is not.
 """
 import logging
 
-from services import llm
+from services import llm, semantic_index
 from services.transcript_search import find_matches, fts_any_query
 
 log = logging.getLogger(__name__)
@@ -57,6 +61,15 @@ PASSAGE_RADIUS = 45
 # Passages within this many seconds of each other in the same episode are the
 # same moment found twice, not two sources.
 SAME_MOMENT_SECONDS = 45.0
+
+# Reciprocal rank fusion. Each retrieval path votes with 1/(K + rank), so a
+# passage ranked well by both wins, and a path returning nothing useful cannot
+# swamp the other. K flattens the top of each list: without it the first result
+# of every search would dominate everything below it.
+RRF_K = 10
+
+# How many windows the meaning-based search contributes.
+SEMANTIC_LIMIT = 12
 
 NOTHING_FOUND = (
     "I could not find anything about that in your transcribed episodes. "
@@ -100,16 +113,35 @@ async def plan_queries(question: str, history: list[dict] | None = None) -> list
     return queries[:5]
 
 
-async def gather(db, queries: list[str]) -> list[dict]:
-    """Passages matching any of `queries`, best first.
+async def gather(db, queries: list[str], question: str = "") -> list[dict]:
+    """Passages matching the searches, best first.
 
-    Ranked by how many distinct searches found the same moment. That is the
-    cheap stand-in for relevance: a passage two independent searches agree on is
-    far more likely to be about the subject than one matching a single common
-    word.
+    Two retrieval paths, fused by reciprocal rank: keyword hits for each planned
+    query, and — where embeddings exist — the windows closest in meaning to the
+    question itself. A passage both paths rank highly is almost certainly about
+    the subject; one found by a single path still gets through, which is what
+    makes each path's blind spot survivable.
     """
     found: dict[tuple[str, int], dict] = {}
+    votes: dict[tuple[str, int], float] = {}
 
+    def register(key: tuple[str, int], passage: dict, rank: int) -> None:
+        """Record a hit and its vote from one retrieval path."""
+        votes[key] = votes.get(key, 0.0) + 1.0 / (RRF_K + rank)
+        existing = found.get(key)
+        if existing is None:
+            found[key] = passage
+            return
+        # Keep the longer text: the two paths window differently, and more
+        # context is strictly better for the model reading it.
+        if len(passage["text"]) > len(existing["text"]):
+            existing["text"] = passage["text"]
+            existing["start"] = passage["start"]
+
+    def bucket(episode_id: str, start: float) -> tuple[str, int]:
+        return (episode_id, int(start // SAME_MOMENT_SECONDS))
+
+    # ── keyword ──────────────────────────────────────────────────────────────
     for query in queries:
         # ANY of the words, matched as prefixes: the queries are a model's guess
         # at the vocabulary a speaker used, so requiring every word to appear
@@ -138,6 +170,7 @@ async def gather(db, queries: list[str]) -> list[dict]:
             # queries still stand.
             continue
 
+        rank = 0
         for row in rows:
             count, snippets = find_matches(
                 row["words_json"], query,
@@ -146,43 +179,50 @@ async def gather(db, queries: list[str]) -> list[dict]:
             if not count:
                 continue
             for snippet in snippets:
-                bucket = int(snippet["start"] // SAME_MOMENT_SECONDS)
-                key = (row["episode_id"], bucket)
-                existing = found.get(key)
-                if existing:
-                    existing["queries"].add(query)
-                    existing["hits"] += count
-                    continue
-                found[key] = {
-                    "episode_id": row["episode_id"],
-                    "episode_title": row["episode_title"],
-                    "podcast_id": row["podcast_id"],
-                    "podcast_title": row["podcast_title"],
-                    "podcast_image": row["podcast_image"],
-                    "published_at": row["published_at"],
-                    "start": round(float(snippet["start"]), 2),
-                    "text": snippet["text"],
-                    "queries": {query},
-                    "hits": count,
-                }
+                rank += 1
+                register(
+                    bucket(row["episode_id"], snippet["start"]),
+                    {
+                        "episode_id": row["episode_id"],
+                        "episode_title": row["episode_title"],
+                        "podcast_id": row["podcast_id"],
+                        "podcast_title": row["podcast_title"],
+                        "podcast_image": row["podcast_image"],
+                        "published_at": row["published_at"],
+                        "start": round(float(snippet["start"]), 2),
+                        "text": snippet["text"],
+                    },
+                    rank,
+                )
 
-    passages = sorted(
-        found.values(),
-        key=lambda p: (len(p["queries"]), p["hits"]),
-        reverse=True,
-    )
+    # ── meaning ──────────────────────────────────────────────────────────────
+    # Searched with the question as asked, not the planned keywords: the whole
+    # point of a vector is that it carries the sense of the sentence.
+    if question.strip():
+        for rank, hit in enumerate(
+            await semantic_index.search(db, question, limit=SEMANTIC_LIMIT), start=1,
+        ):
+            register(bucket(hit["episode_id"], hit["start"]), {
+                "episode_id": hit["episode_id"],
+                "episode_title": hit["episode_title"],
+                "podcast_id": hit["podcast_id"],
+                "podcast_title": hit["podcast_title"],
+                "podcast_image": hit["podcast_image"],
+                "published_at": hit["published_at"],
+                "start": hit["start"],
+                "text": hit["text"],
+            }, rank)
 
-    # Trim to what a single call can carry, and drop the set that was only
-    # needed for ranking.
+    passages = sorted(found.items(), key=lambda item: votes[item[0]], reverse=True)
+
+    # Trim to what a single call can carry.
     kept: list[dict] = []
     total = 0
-    for passage in passages[:MAX_PASSAGES]:
+    for _, passage in passages[:MAX_PASSAGES]:
         length = len(passage["text"])
         if kept and total + length > MAX_CONTEXT_CHARS:
             break
         total += length
-        passage.pop("queries", None)
-        passage.pop("hits", None)
         kept.append(passage)
     return kept
 
@@ -235,7 +275,7 @@ async def ask(db, question: str, history: list[dict] | None = None) -> dict:
         return {"answer": "", "passages": [], "cited": []}
 
     queries = await plan_queries(question, history)
-    passages = await gather(db, queries)
+    passages = await gather(db, queries, question=question)
 
     if not passages:
         # No point spending a model call to say nothing was found.

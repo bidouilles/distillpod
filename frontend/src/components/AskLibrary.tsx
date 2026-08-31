@@ -4,6 +4,7 @@ import {
   askLibrary, clearAskHistory, getAskHistory,
   type AskMessage, type Citation,
 } from "../api/client";
+import SemanticIndexCard from "./SemanticIndexCard";
 
 /**
  * Ask the whole library a question.
@@ -152,13 +153,17 @@ export default function AskLibrary() {
 
   return (
     <div className="space-y-3">
+      {/* What retrieval can currently see. Disappears once the index is complete. */}
+      <SemanticIndexCard />
+
       {history.length === 0 && stage === "idle" && (
         <div className="text-center py-6 space-y-3">
           <div className="text-4xl">🔎</div>
           <p className="text-gray-300 font-medium">Ask your episodes</p>
           <p className="text-sm text-gray-500 max-w-sm mx-auto leading-relaxed">
             Answered from the transcripts you already have, with the episode and
-            timestamp behind every claim. Only transcribed episodes are searched.
+            timestamp behind every claim. Searches by keyword and — once the
+            index is built — by meaning.
           </p>
           <div className="flex flex-col gap-2 pt-1">
             {EXAMPLES.map(e => (

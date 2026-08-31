@@ -120,6 +120,8 @@ backend/
     audio_processor.py # Silence measurement, the ffmpeg cut, and its mapping
     timeline.py        # Original <-> clean-cut clock conversion
     librarian.py       # Plan searches -> retrieve passages -> answer with citations
+    embeddings.py      # Text -> vectors (mistral | local | off), normalised here
+    semantic_index.py  # Transcript windows + vector search feeding the librarian
     chapterizer.py     # Auto-chapter generation
     researcher.py      # Deep research report generation
 frontend/
@@ -162,6 +164,14 @@ scripts/
   is only useful because it is cheap, and in a vault six months later, which of
   the two produced a quote is the difference between standing behind it and
   having to check it.
+- **Semantic search is optional and opt-in.** `EMBED_BACKEND=auto` resolves to
+  Mistral when a key is present, which is usually the case for Voxtral — so the
+  *first* index is only ever built by pressing the button
+  (`semantic_index.opted_in`), because embedding sends transcript text off the
+  box and an upgrade must not start doing that on its own. After that the
+  nightly job keeps it level. With no backend, Ask falls back to keyword
+  retrieval, which is how it shipped and still works; every code path here
+  returns empty rather than raising when embeddings are unavailable.
 - **Library-wide questions retrieve before they generate.** No model call can
   hold three hundred transcripts, so `services/librarian.py` plans keyword
   searches (one small call), retrieves passages through the existing FTS index,
