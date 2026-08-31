@@ -202,9 +202,11 @@ async def add_video(req: AddVideoRequest):
         # The channel as a subscription: the feed joins on one, and it makes
         # videos filterable by who made them like any other show.
         await db.execute(
+            # OR IGNORE, so a channel already subscribed to keeps its
+            # standing: adding one of its videos must not demote it.
             """INSERT OR IGNORE INTO subscriptions
-               (podcast_id, feed_url, title, image_url, subscribed_at)
-               VALUES (?, ?, ?, ?, ?)""",
+               (podcast_id, feed_url, title, image_url, subscribed_at, source)
+               VALUES (?, ?, ?, ?, ?, 'youtube_video')""",
             (podcast_id,
              f"https://www.youtube.com/feeds/videos.xml?channel_id={meta.get('channel_id', '')}",
              channel, thumbnail, now),

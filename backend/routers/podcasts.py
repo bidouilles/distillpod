@@ -55,8 +55,9 @@ async def subscribe(podcast_id: str, feed_url: str, title: str, image_url: str =
     db = await get_db()
     try:
         await db.execute(
-            """INSERT OR IGNORE INTO subscriptions (podcast_id, feed_url, title, image_url, subscribed_at)
-               VALUES (?, ?, ?, ?, ?)""",
+            """INSERT OR IGNORE INTO subscriptions
+               (podcast_id, feed_url, title, image_url, subscribed_at, source)
+               VALUES (?, ?, ?, ?, ?, 'podcast')""",
             (podcast_id, feed_url, title, image_url, datetime.now(timezone.utc).isoformat()),
         )
         await db.commit()
@@ -129,8 +130,11 @@ async def _refresh_all() -> None:
     try:
         db = await get_db()
         try:
+            # Same rule as the nightly job: a one-off video's channel is not a
+            # subscription, so it is not polled.
             subs = await db.execute_fetchall(
-                "SELECT podcast_id, feed_url, title FROM subscriptions"
+                """SELECT podcast_id, feed_url, title FROM subscriptions
+                   WHERE COALESCE(source, 'podcast') != 'youtube_video'"""
             )
         finally:
             await db.close()

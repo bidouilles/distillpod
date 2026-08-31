@@ -433,8 +433,12 @@ async def main() -> None:
         log.info("No stale episodes found")
 
     db = await get_db()
+    # A `youtube_video` row exists only because one of the channel's videos was
+    # added; nobody subscribed to it, so importing its uploads would contradict
+    # what the library says it is. Subscribing to the channel promotes the row.
     subs = await db.execute_fetchall(
-        "SELECT podcast_id, feed_url, title FROM subscriptions"
+        """SELECT podcast_id, feed_url, title FROM subscriptions
+           WHERE COALESCE(source, 'podcast') != 'youtube_video'"""
     )
     await db.close()
 

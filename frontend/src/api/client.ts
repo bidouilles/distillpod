@@ -132,6 +132,8 @@ export interface Tag {
 export interface Subscription {
   podcast_id: string; feed_url: string; title: string; image_url?: string;
   subscribed_at: string; tags?: Tag[];
+  /** "podcast" | "youtube_channel" | "youtube_video" (one video, not subscribed). */
+  source?: string;
 }
 export interface Episode {
   id: string; podcast_id: string; title: string; description?: string;

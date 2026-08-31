@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import SourceBadge from "../components/SourceBadge";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { getSubscriptions, getEpisodes, unsubscribe, Subscription, Episode, Tag } from "../api/client";
 import { getCached, setCached, bustCache } from "../cache";
@@ -94,6 +95,7 @@ function EpisodeList({ sub, onUnsubscribed }: { sub: Subscription; onUnsubscribe
         <div className="flex-1 flex items-center gap-2 min-w-0">
           {sub.image_url && <img src={sub.image_url} className="w-8 h-8 rounded object-cover flex-shrink-0" alt="" />}
           <h2 className="font-semibold text-sm leading-snug line-clamp-1">{sub.title}</h2>
+          <SourceBadge source={sub.source} />
         </div>
         <button
           onClick={() => loadEpisodes(true)}
@@ -247,9 +249,10 @@ export default function Subscriptions() {
             : <div className="w-14 h-14 rounded-lg bg-gray-800 flex-shrink-0 flex items-center justify-center text-2xl">🎙</div>
           }
           <div className="flex-1 min-w-0">
-            <div className="font-medium leading-snug">{s.title}</div>
-            <div className="text-xs text-gray-500 mt-0.5">
-              Since {fmtDate(s.subscribed_at)}
+            <div className="font-medium leading-snug truncate">{s.title}</div>
+            <div className="text-xs text-gray-500 mt-1 flex items-center gap-2 min-w-0">
+              <SourceBadge source={s.source} />
+              <span className="truncate">Since {fmtDate(s.subscribed_at)}</span>
             </div>
           </div>
           <span className="text-gray-600 text-lg">›</span>

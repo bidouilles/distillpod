@@ -182,6 +182,7 @@ async def init_db():
             'ALTER TABLE episodes ADD COLUMN summary TEXT',
             'ALTER TABLE episodes ADD COLUMN chapters_status TEXT DEFAULT \'none\'',
             'ALTER TABLE gists ADD COLUMN auto INTEGER DEFAULT 0',
+            'ALTER TABLE subscriptions ADD COLUMN source TEXT',
         ]:
             try:
                 await db.execute(alter)
@@ -189,8 +190,31 @@ async def init_db():
                 pass
         await db.commit()
 
+        await _backfill_subscription_source(db)
         await _migrate_unsafe_episode_ids(db)
         await _backfill_transcript_index(db)
+
+
+async def _backfill_subscription_source(db) -> None:
+    """Label existing subscriptions so the library can say what each one is.
+
+    Rows created before this column existed cannot be asked what they were, so
+    YouTube ones are separated by episode count: a channel sync imports up to
+    15 at a time, whereas adding a single video creates exactly one. Three is
+    comfortably clear of both. A row guessed wrong corrects itself the moment
+    the channel is subscribed to again.
+    """
+    await db.execute(
+        """UPDATE subscriptions SET source = CASE
+             WHEN podcast_id LIKE 'yt-%' AND (
+               SELECT COUNT(*) FROM episodes e WHERE e.podcast_id = subscriptions.podcast_id
+             ) >= 3 THEN 'youtube_channel'
+             WHEN podcast_id LIKE 'yt-%' THEN 'youtube_video'
+             ELSE 'podcast'
+           END
+           WHERE source IS NULL"""
+    )
+    await db.commit()
 
 
 async def index_transcript(db, episode_id: str, words_json: str) -> None:

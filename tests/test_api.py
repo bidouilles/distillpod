@@ -562,3 +562,75 @@ class TestRefreshSubscriptions:
             await client.post("/podcasts/refresh")
             state = await self._settle(client)
         assert state["new"] == 0
+
+
+VIDEO_URL = "https://www.youtube.com/watch?v=jNQXAC9IVRw"
+CHANNEL_PODCAST_ID = "yt-UC4QobU6STFB0P71PMvOGN5A"
+META = {
+    "id": "jNQXAC9IVRw", "title": "Me at the zoo", "description": "",
+    "webpage_url": VIDEO_URL, "duration": 19, "thumbnail": None,
+    "channel": "jawed", "channel_id": "UC4QobU6STFB0P71PMvOGN5A",
+    "upload_date": "20050423", "language": "en",
+}
+
+
+class TestSubscriptionSource:
+    """The library shows what each row is, so the label has to be right."""
+
+    async def test_a_podcast_subscription_is_labelled_a_podcast(self, client):
+        await client.post("/podcasts/subscriptions/pod_new?feed_url=https://f.example.com&title=New")
+        subs = (await client.get("/podcasts/subscriptions")).json()
+        row = next(s for s in subs if s["podcast_id"] == "pod_new")
+        assert row["source"] == "podcast"
+
+    async def test_adding_one_video_marks_its_channel_as_a_single_video(self, client):
+        from services import youtube
+        with patch.object(youtube, "fetch_metadata", AsyncMock(return_value=META)), \
+             patch("routers.youtube._start_ingest"):
+            await client.post("/youtube/add", json={"url": VIDEO_URL})
+        subs = (await client.get("/podcasts/subscriptions")).json()
+        row = next(s for s in subs if s["podcast_id"] == CHANNEL_PODCAST_ID)
+        assert row["source"] == "youtube_video"
+
+    async def test_subscribing_promotes_a_single_video_row_to_a_channel(self, client):
+        """Adding a video then subscribing must not leave it looking one-off."""
+        from services import youtube
+        with patch.object(youtube, "fetch_metadata", AsyncMock(return_value=META)), \
+             patch("routers.youtube._start_ingest"):
+            await client.post("/youtube/add", json={"url": VIDEO_URL})
+
+        channel = {"channel_id": META["channel_id"], "title": "Low Level", "thumbnail": None}
+        with patch.object(youtube, "resolve_channel", AsyncMock(return_value=channel)), \
+             patch("routers.youtube._start_channel_import"):
+            await client.post("/youtube/add", json={"url": "https://www.youtube.com/@LowLevelTV"})
+
+        subs = (await client.get("/podcasts/subscriptions")).json()
+        row = next(s for s in subs if s["podcast_id"] == CHANNEL_PODCAST_ID)
+        assert row["source"] == "youtube_channel"
+
+    async def test_adding_a_video_does_not_demote_a_subscribed_channel(self, client):
+        from services import youtube
+        channel = {"channel_id": META["channel_id"], "title": "Low Level", "thumbnail": None}
+        with patch.object(youtube, "resolve_channel", AsyncMock(return_value=channel)), \
+             patch("routers.youtube._start_channel_import"):
+            await client.post("/youtube/add", json={"url": "https://www.youtube.com/@LowLevelTV"})
+        with patch.object(youtube, "fetch_metadata", AsyncMock(return_value=META)), \
+             patch("routers.youtube._start_ingest"):
+            await client.post("/youtube/add", json={"url": VIDEO_URL})
+
+        subs = (await client.get("/podcasts/subscriptions")).json()
+        row = next(s for s in subs if s["podcast_id"] == CHANNEL_PODCAST_ID)
+        assert row["source"] == "youtube_channel"
+
+    async def test_a_one_off_video_channel_is_not_polled_by_refresh(self, client):
+        """Its badge says nobody subscribed, so importing uploads would lie."""
+        from services import youtube
+        with patch.object(youtube, "fetch_metadata", AsyncMock(return_value=META)), \
+             patch("routers.youtube._start_ingest"):
+            await client.post("/youtube/add", json={"url": VIDEO_URL})
+
+        with patch("services.youtube_library.sync_channel", AsyncMock()) as sync, \
+             patch("services.rss.fetch_episodes", AsyncMock(return_value=[])):
+            await client.post("/podcasts/refresh")
+            await TestRefreshSubscriptions._settle(client)
+        assert not sync.called
