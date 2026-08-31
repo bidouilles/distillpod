@@ -6,9 +6,10 @@ test.describe("Suite 8 — SPA Routing (Reload Safety)", () => {
   const routes = [
     { path: "/",               name: "Home" },
     { path: "/search",         name: "Search" },
-    { path: "/subscriptions",  name: "Library" },
+    { path: "/library",        name: "Library" },
     { path: `/player/${EPISODE_DONE_ID}`, name: "Player" },
-    { path: "/gists",          name: "Gists" },
+    { path: "/saved",          name: "Saved" },
+    { path: "/up-next",        name: "Up Next" },
   ];
 
   for (const { path, name } of routes) {

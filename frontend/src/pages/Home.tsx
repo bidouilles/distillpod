@@ -1,10 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getFeed, getTags, getProgress, refreshSubscriptions, getRefreshStatus, FeedEpisode, Tag, ProgressRecord } from "../api/client";
+import {
+  getFeed, getTags, getProgress, refreshSubscriptions, getRefreshStatus,
+  getInbox, markInboxSeen, putProgress,
+  FeedEpisode, Tag, ProgressRecord,
+} from "../api/client";
 import ContinueListening from "../components/ContinueListening";
 import { clearProgress } from "../context/AudioContext";
+import { useQueue } from "../stores/queueStore";
 import { getCached, setCached } from "../cache";
-import FeedFilterBar, { FeedFilterState, EMPTY_FILTERS, hasActiveFilters } from "../components/FeedFilterBar";
+import FeedFilterBar, {
+  FeedFilterState, EMPTY_FILTERS, hasActiveFilters, LENGTH_BOUNDS,
+} from "../components/FeedFilterBar";
 
 const FEED_CACHE_KEY = "home:feed";
 const SHOTS_CACHE_KEY = "home:shotCounts";
@@ -60,12 +67,14 @@ function SkeletonCard() {
 
 // ─── Episode card ─────────────────────────────────────────────────────────────
 function EpisodeCard({
-  ep, shotCount, played, onTogglePlayed,
+  ep, shotCount, played, onTogglePlayed, onQueue, queued,
 }: {
   ep: FeedEpisode;
   shotCount: number;
   played: boolean;
   onTogglePlayed: () => void;
+  onQueue: () => void;
+  queued: boolean;
 }) {
   const nav = useNavigate();
 
@@ -105,8 +114,29 @@ function EpisodeCard({
               ⚗️ {shotCount}
             </span>
           )}
+          {ep.bookmark_count > 0 && (
+            <span className="text-xs bg-yellow-900/60 text-yellow-300 px-1.5 py-0.5 rounded-full font-medium">
+              🔖 {ep.bookmark_count}
+            </span>
+          )}
         </div>
       </div>
+
+      {/* Add to Up Next. On the card rather than only on the episode page,
+          because queueing while skimming the feed is how a queue actually gets
+          built — one pass down the new episodes. */}
+      <button
+        onClick={e => { e.stopPropagation(); onQueue(); }}
+        aria-label={queued ? "In Up Next" : "Add to Up Next"}
+        title={queued ? "In Up Next" : "Add to Up Next"}
+        className={`flex-shrink-0 self-center w-8 h-8 rounded-full flex items-center justify-center transition-colors ${
+          queued
+            ? "text-indigo-400 bg-indigo-600/15"
+            : "text-gray-600 hover:text-white hover:bg-gray-800"
+        }`}
+      >
+        {queued ? "✓" : "+"}
+      </button>
 
       {/* Listened toggle */}
       <button
@@ -141,6 +171,8 @@ export default function Home() {
   const [tags, setTags] = useState<Tag[]>([]);
   const [progress, setProgress] = useState<ProgressRecord[]>([]);
   const [toast, setToast] = useState("");
+  const [inbox, setInbox] = useState<{ new: number; since: string | null }>({ new: 0, since: null });
+  const { queue, addToEnd } = useQueue();
   const refreshPoll = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   const filtering = hasActiveFilters(filters);
@@ -148,10 +180,17 @@ export default function Home() {
   const fetchFeed = async (showRefreshing = false, f: FeedFilterState = filters) => {
     if (showRefreshing) setRefreshing(true);
     try {
+      const bounds = f.length ? LENGTH_BOUNDS[f.length] : {};
       const episodes = await getFeed({
         q: f.q.trim(),
         tag_id: f.tagId,
         status: f.status,
+        // Played state lives on the server, so this filter can too — and has
+        // to, or an episode finished on the phone still counts as unplayed here.
+        unplayed: f.unplayedOnly || undefined,
+        min_minutes: bounds.min,
+        max_minutes: bounds.max,
+        sort: f.sort,
         // A filtered view should search the whole library, not just the most
         // recent page, or a match from last year would silently not exist.
         limit: hasActiveFilters(f) ? 200 : 50,
@@ -161,6 +200,13 @@ export default function Home() {
       episodes.forEach(ep => { counts[ep.id] = ep.distill_count; });
       setFeed(episodes);
       setShotCounts(counts);
+      // The rows carry server-side played state, so a device that has never
+      // opened an episode still greys out the ones already heard elsewhere.
+      setPlayed(prev => {
+        const merged = new Set(prev);
+        episodes.forEach(ep => { if (ep.played) merged.add(ep.id); });
+        return merged;
+      });
 
       // Only the unfiltered feed is worth caching, and an empty result there
       // genuinely means "no subscriptions" — under a filter it means "no match".
@@ -191,6 +237,7 @@ export default function Home() {
         if (refreshPoll.current) clearInterval(refreshPoll.current);
         setRefreshing(false);
         await fetchFeed();
+        loadInbox();
         setToast(
           s.new > 0
             ? `${s.new} new episode${s.new === 1 ? "" : "s"}`
@@ -230,7 +277,7 @@ export default function Home() {
 
   // Playback state lives on the server, so read it from there rather than
   // trusting this device's localStorage: an episode finished on the phone has
-  // to count as played here too, or the "unplayed" filter quietly lies.
+  // to count as played here too.
   useEffect(() => {
     getProgress()
       .then(records => {
@@ -244,17 +291,43 @@ export default function Home() {
       .catch(() => {});
   }, []);
 
+  // How much has arrived since this library was last looked at.
+  const loadInbox = () => { getInbox().then(setInbox).catch(() => {}); };
+  useEffect(loadInbox, []);
+
+  const clearInbox = async () => {
+    setInbox({ new: 0, since: new Date().toISOString() });
+    try { await markInboxSeen(); } catch { loadInbox(); }
+  };
+
   const applyFilters = (f: FeedFilterState) => {
     setFilters(f);
     setLoading(true);
     fetchFeed(false, f);
   };
 
-  // Played state is local-only, so this last hop cannot be done server-side.
-  const visible = filters.unplayedOnly ? feed.filter(ep => !played.has(ep.id)) : feed;
+  // No local pass left: the server applied every filter, including unplayed.
+  const visible = feed;
 
   const handleTogglePlayed = (id: string) => {
-    setPlayed(togglePlayed(id));
+    const next = togglePlayed(id);
+    setPlayed(next);
+    // Carry it up, so the same episode is played (or not) on every device —
+    // and so the unplayed filter, now resolved server-side, agrees with the tick.
+    putProgress(id, { played: next.has(id) }).catch(() => {});
+  };
+
+  const handleQueue = (ep: FeedEpisode) => {
+    addToEnd({
+      episodeId: ep.id,
+      title: ep.title,
+      podcastTitle: ep.podcast_title,
+      audioUrl: ep.audio_url,
+      imageUrl: ep.podcast_image || ep.image_url,
+      durationSeconds: ep.duration_seconds,
+    });
+    setToast("Added to Up Next");
+    setTimeout(() => setToast(""), 1800);
   };
 
   // ── Empty: no subscriptions ──
@@ -287,6 +360,23 @@ export default function Home() {
           setProgress(prev => prev.filter(r => r.episode_id !== episodeId));
         }}
       />
+
+      {/* What arrived since you last looked. Like an inbox, which is the only
+          honest description of a feed you follow — and, like an inbox, it can
+          be cleared in one tap rather than by scrolling past everything. */}
+      {inbox.new > 0 && (
+        <div className="bg-indigo-600/15 border border-indigo-700/30 rounded-xl px-4 py-2.5 flex items-center gap-3">
+          <span className="text-sm text-indigo-200 flex-1">
+            <span className="font-semibold">{inbox.new}</span> new episode{inbox.new === 1 ? "" : "s"} since you last looked
+          </span>
+          <button
+            onClick={clearInbox}
+            className="text-xs font-medium text-indigo-300 hover:text-white min-h-[32px] px-2 flex-shrink-0"
+          >
+            Mark seen
+          </button>
+        </div>
+      )}
 
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-bold">Latest Episodes</h1>
@@ -335,6 +425,8 @@ export default function Home() {
           shotCount={shotCounts[ep.id] || 0}
           played={played.has(ep.id)}
           onTogglePlayed={() => handleTogglePlayed(ep.id)}
+          onQueue={() => handleQueue(ep)}
+          queued={queue.some(q => q.episodeId === ep.id) || ep.queued === 1}
         />
       ))}
     </div>

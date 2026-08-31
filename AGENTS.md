@@ -94,6 +94,10 @@ backend/
     youtube.py         # Add a YouTube video as an episode
     player.py          # Download, stream audio, transcription status, chapters
     gists.py           # Create/list/delete AI gists (distillations)
+    bookmarks.py       # Transcript quotes kept with no model call
+    queue.py           # Up Next, server-side (the client mirrors it locally)
+    playlists.py       # Playlists: manual membership or a stored smart rule
+    storage.py         # Media disk usage, retention policy, prune
     chat.py            # Per-episode AI chat
     research.py        # Deep research reports from gists
     auth.py            # Google OAuth2 login/logout
@@ -107,6 +111,10 @@ backend/
     downloader.py      # Episode audio downloader (dispatches YouTube to yt-dlp)
     transcriber.py     # transcription orchestration + DB writes (STT lives in stt.py)
     snip_engine.py     # Gist extraction from transcript
+    bookmark_engine.py # Sentence around a timestamp — pure transcript lookup
+    episode_query.py   # THE place episode filters become SQL (feed + smart playlists)
+    retention.py       # What media costs; what may be deleted
+    opml.py            # OPML import/export
     ad_detector.py     # Ad segment detection
     chapterizer.py     # Auto-chapter generation
     researcher.py      # Deep research report generation
@@ -122,9 +130,38 @@ scripts/
 
 - The backend serves the built frontend as a SPA catch-all -- no separate web server needed.
 - Protected API routes: `/gists`, `/podcasts`, `/player`, `/chat`, `/research`,
-  `/tags`, `/search`, `/youtube`. Auth routes and frontend assets are public. `/chat` and `/research`
+  `/tags`, `/search`, `/youtube`, `/queue`, `/bookmarks`, `/playlists`, `/storage`.
+  Auth routes and frontend assets are public. `/chat` and `/research`
   were missing from that list and were reachable unauthenticated — anything new
   that reads user data or spends the model subscription must be added there.
+  `/storage` can delete media, so it is not optional.
+- **SPA paths and API prefixes share one namespace.** The catch-all that serves
+  the SPA runs last, so a router registering a path the SPA also uses makes that
+  screen return JSON on reload — and only on reload, which is the case nobody
+  clicks through while developing. `/queue` and `/playlists/:id` were lost this
+  way; the SPA now uses `/up-next` and `/library/playlists/:id`.
+  `tests/test_spa_routes.py` asserts every SPA path is still unclaimed — add to
+  its `SPA_PATHS` when you add a screen.
+- Episode filters (`unplayed`, status, tag, duration, sort) live in
+  `services/episode_query.py` and nowhere else. The feed and smart playlists
+  both build their query there, so a rule cannot mean one thing on Home and
+  another inside a playlist. Counts there are scalar subqueries, not joins:
+  joining `gists` and `bookmarks` in one statement multiplies the rows and an
+  episode with 3 distills and 2 bookmarks reports 6 of each.
+- `episodes.created_at` is stamped by a **trigger**, not by callers. Six insert
+  sites feed that table (RSS, channel sync, the nightly job, …) and SQLite
+  rejects a non-constant column default in `ALTER TABLE`, so the database does
+  it. The inbox counts from it rather than `published_at`, because a channel
+  import backfills years of uploads at once and none of those are news.
+- Two ways to keep a moment, on purpose: **⚗️ distill** costs a CLI round trip
+  and ~30s; **🔖 bookmark** costs an INSERT. Do not merge them — the cheap one
+  is only useful because it is cheap, and in a vault six months later, which of
+  the two produced a quote is the difference between standing behind it and
+  having to check it.
+- Retention (`services/retention.py`) is off by default and never touches
+  anything queued, part-heard, or (unless asked) unplayed. It deletes audio
+  only: the transcript is a thousandth of the size and cannot be re-derived,
+  the audio can just be downloaded again.
 - The read-along view (`frontend/src/components/LiveTranscript.tsx`) takes its
   position from the audio element on an animation frame, not from AudioContext's
   `currentTime`: that state updates on `timeupdate`, roughly 4Hz, which is

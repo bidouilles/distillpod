@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getTranscript, TranscriptWord } from "../api/client";
+import { bookmarkLine, getTranscript, listBookmarks, TranscriptWord } from "../api/client";
 
 /** Words grouped into a readable line, with the index range they occupy. */
 interface Line {
@@ -75,16 +75,27 @@ export default function LiveTranscript({
   audioRef,
   open,
   onSeek,
+  onBookmarked,
 }: {
   episodeId: string;
   audioRef: React.RefObject<HTMLAudioElement | null>;
   open: boolean;
   onSeek: (seconds: number) => void;
+  /** Called after a line is kept, so the player can show a count. */
+  onBookmarked?: () => void;
 }) {
   const [words, setWords] = useState<TranscriptWord[]>([]);
   const [state, setState] = useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
   const [active, setActive] = useState(-1);
   const [following, setFollowing] = useState(true);
+  // Where this episode's bookmarks start, so a kept quote is visible in the
+  // text rather than only in a list somewhere else. Held as times rather than
+  // line indexes: a bookmark made from the player starts mid-line — it is a
+  // sentence, not a line — so the mark has to be matched by range.
+  const [markedAt, setMarkedAt] = useState<number[]>([]);
+  const [justMarked, setJustMarked] = useState<number | null>(null);
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const heldRef = useRef(false);
 
   const scroller = useRef<HTMLDivElement | null>(null);
   const activeLineEl = useRef<HTMLButtonElement | null>(null);
@@ -92,6 +103,12 @@ export default function LiveTranscript({
   const fetchedFor = useRef<string | null>(null);
 
   const lines = useMemo(() => toLines(words), [words]);
+
+  /** Whether a bookmark begins inside this line. */
+  const isMarked = useCallback(
+    (line: Line) => markedAt.some(t => t >= line.start - 0.3 && t < line.end),
+    [markedAt],
+  );
 
   // Which line owns the active word. Lines are contiguous, so a scan from the
   // end is enough and avoids keeping a parallel word->line map in sync.
@@ -103,8 +120,17 @@ export default function LiveTranscript({
 
   useEffect(() => {
     fetchedFor.current = null;
-    setWords([]); setState("idle"); setActive(-1);
+    setWords([]); setState("idle"); setActive(-1); setMarkedAt([]);
   }, [episodeId]);
+
+  // Bookmarks already kept for this episode, so reopening the transcript shows
+  // them.
+  useEffect(() => {
+    if (!open || !episodeId) return;
+    listBookmarks(episodeId)
+      .then(list => setMarkedAt(list.map(b => b.start_seconds)))
+      .catch(() => {});
+  }, [open, episodeId]);
 
   // Fetched once per episode, the first time the sheet is opened.
   //
@@ -179,6 +205,45 @@ export default function LiveTranscript({
     centreActiveLine("smooth");
   };
 
+  /**
+   * Keep a line as a bookmark.
+   *
+   * A press-and-hold rather than a button per line: this is a wall of text
+   * being read while audio plays, and 200 small targets down the right-hand
+   * side would compete with the reading. Holding is also the gesture that
+   * works with a thumb on a moving train, which is the case this whole feature
+   * exists for.
+   */
+  const keepLine = useCallback(async (line: Line) => {
+    const text = line.words.map(w => w[2]).join("").trim();
+    if (!text) return;
+    const at = line.start;
+    setMarkedAt(prev => [...prev, at]);
+    setJustMarked(at);
+    setTimeout(() => setJustMarked(cur => (cur === at ? null : cur)), 1200);
+    try {
+      await bookmarkLine(episodeId, line.start, line.end, text);
+      onBookmarked?.();
+    } catch {
+      setMarkedAt(prev => prev.filter(t => t !== at));
+    }
+  }, [episodeId, onBookmarked]);
+
+  const startHold = (line: Line) => {
+    heldRef.current = false;
+    clearTimeout(holdTimer.current);
+    holdTimer.current = setTimeout(() => {
+      heldRef.current = true;
+      // Confirm the gesture landed even when the screen is not being looked at.
+      if ("vibrate" in navigator) navigator.vibrate?.(15);
+      keepLine(line);
+    }, 450);
+  };
+
+  const endHold = () => clearTimeout(holdTimer.current);
+
+  useEffect(() => () => clearTimeout(holdTimer.current), []);
+
   if (state === "loading" || state === "idle") {
     return <p className="text-center text-white/40 text-sm py-10">Loading transcript…</p>;
   }
@@ -203,11 +268,28 @@ export default function LiveTranscript({
             <button
               key={i}
               ref={isActive ? activeLineEl : undefined}
-              onClick={() => { onSeek(line.start); setFollowing(true); }}
-              className={`block w-full text-left text-[17px] leading-relaxed transition-colors duration-200 ${
+              onClick={() => {
+                // A hold has already done its work; the click that follows it
+                // must not also jump the audio somewhere else.
+                if (heldRef.current) { heldRef.current = false; return; }
+                onSeek(line.start);
+                setFollowing(true);
+              }}
+              onPointerDown={() => startHold(line)}
+              onPointerUp={endHold}
+              onPointerLeave={endHold}
+              onContextMenu={e => e.preventDefault()}
+              className={`block w-full text-left text-[17px] leading-relaxed transition-colors duration-200 relative ${
+                isMarked(line) ? "border-l-2 border-yellow-500/60 -ml-3 pl-3" : ""
+              } ${
                 isActive ? "text-white" : i < activeLine ? "text-white/25" : "text-white/40"
               }`}
             >
+              {justMarked === line.start && (
+                <span className="absolute -left-1 -top-5 text-[11px] text-yellow-300 font-medium">
+                  🔖 kept
+                </span>
+              )}
               {isActive
                 ? line.words.map((w, j) => (
                     <span

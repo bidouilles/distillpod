@@ -8,6 +8,8 @@ import {
 import { useAudio, readProgress, type PlayableEpisode } from "../context/AudioContext";
 import { copyText, downloadText, slugify } from "../lib/clipboard";
 import { CopyButton, ShareButton, DownloadIcon } from "../components/ActionButtons";
+import BookmarkList from "../components/BookmarkList";
+import AddToPlaylist from "../components/AddToPlaylist";
 import { useQueue, type QueueItem } from "../stores/queueStore";
 
 function stripHtml(html: string): string {
@@ -118,6 +120,36 @@ function GistCard({ gist, episodeTitle, podcastTitle }: {
 }
 
 // ─── Episode page ──────────────────────────────────────────────────────────────
+/**
+ * Bookmarks for this episode.
+ *
+ * Re-read when the fullscreen player closes, for the same reason the distills
+ * are: the player is where they are made, so coming back from it is the moment
+ * the list is out of date.
+ */
+function BookmarksSection({ episodeId, playerExpanded }: {
+  episodeId?: string; playerExpanded: boolean;
+}) {
+  const [refreshKey, setRefreshKey] = useState(0);
+  const wasExpanded = useRef(playerExpanded);
+
+  useEffect(() => {
+    if (wasExpanded.current && !playerExpanded) setRefreshKey(k => k + 1);
+    wasExpanded.current = playerExpanded;
+  }, [playerExpanded]);
+
+  if (!episodeId) return null;
+
+  return (
+    <BookmarkList
+      episodeId={episodeId}
+      compact
+      refreshKey={refreshKey}
+      heading="🔖 Bookmarks"
+    />
+  );
+}
+
 export default function Player() {
   const { episodeId }  = useParams<{ episodeId: string }>();
   const location       = useLocation();
@@ -611,6 +643,10 @@ export default function Player() {
           </div>
         )}
 
+        {/* Bookmarks. Above the distills because there are usually more of them:
+            one costs a tap, a distillation costs a model call. */}
+        <BookmarksSection episodeId={episodeId} playerExpanded={playerExpanded} />
+
         {/* Distills */}
         {gists.length > 0 && (
           <div className="space-y-3">
@@ -682,6 +718,10 @@ export default function Player() {
             )}
           </div>
         )}
+
+        {/* Organising this episode: a playlist is a list you keep, as opposed to
+            Up Next, which is a list you are about to consume. */}
+        <AddToPlaylist episodeId={episodeId!} />
 
         {/* Empty distills nudge */}
         {gists.length === 0 && isThisEpisode && !snipping && (

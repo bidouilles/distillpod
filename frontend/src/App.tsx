@@ -1,17 +1,19 @@
 import { useState, useEffect } from "react";
 import { getCached, setCached } from "./cache";
-import { getSubscriptions, getEpisodes } from "./api/client";
+import { getInbox, getSubscriptions, getEpisodes } from "./api/client";
 import { useQueue } from "./stores/queueStore";
-import { BrowserRouter, Routes, Route, useLocation, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { AudioProvider, useAudio } from "./context/AudioContext";
 import MiniPlayer from "./components/MiniPlayer";
 import FullscreenPlayer from "./components/FullscreenPlayer";
 import Home from "./pages/Home";
 import Search from "./pages/Search";
 import Queue from './pages/Queue';
-import Subscriptions, { PodcastEpisodes } from "./pages/Subscriptions";
+import Library from "./pages/Library";
+import { PodcastEpisodes } from "./pages/Subscriptions";
+import PlaylistDetail from "./pages/PlaylistDetail";
 import Player from "./pages/Player";
-import Gists from "./pages/Gists";
+import Saved from "./pages/Saved";
 import Chat from "./pages/Chat";
 import Login from "./pages/Login";
 import Unauthorized from "./pages/Unauthorized";
@@ -38,38 +40,43 @@ const LibraryIcon = ({ active }: { active: boolean }) => (
   </svg>
 );
 
-const QueueIcon = ({ active }: { active: boolean }) => (
+const SavedIcon = ({ active }: { active: boolean }) => (
+  <svg viewBox="0 0 24 24" fill={active ? "currentColor" : "none"} stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6">
+    <path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" />
+  </svg>
+);
+
+const QueueIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
     <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
     <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
   </svg>
 );
 
-const GistsIcon = ({ active }: { active: boolean }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.5 : 2} strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6">
-    <circle cx="6" cy="6" r="3" />
-    <circle cx="6" cy="18" r="3" />
-    <line x1="20" y1="4" x2="8.12" y2="15.88" />
-    <line x1="14.47" y1="14.48" x2="20" y2="20" />
-    <line x1="8.12" y1="8.12" x2="12" y2="12" />
-  </svg>
-);
-
 // ─── Bottom nav ───────────────────────────────────────────────────────────────
+// Four tabs rather than five. Up Next moved to the header, where it is visible
+// from every screen instead of only when the tab bar is looked at — and where
+// it can carry a count. That buys the remaining four bigger touch targets, and
+// makes room for the Library to become a place with sections rather than one
+// list of shows.
 const tabs = [
-  { to: "/",              label: "Home",    Icon: HomeIcon    },
-  { to: "/search",        label: "Search",  Icon: SearchIcon  },
-  { to: "/queue",         label: "Queue",   Icon: QueueIcon   },
-  { to: "/subscriptions", label: "Library", Icon: LibraryIcon },
-  { to: "/gists",         label: "Distills",Icon: GistsIcon   },
+  { to: "/",        label: "Home",    Icon: HomeIcon    },
+  { to: "/search",  label: "Search",  Icon: SearchIcon  },
+  { to: "/library", label: "Library", Icon: LibraryIcon },
+  { to: "/saved",   label: "Saved",   Icon: SavedIcon   },
 ];
 
 function BottomNav() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { queue } = useQueue();
-  const isActive = (to: string) =>
-    to === "/" ? location.pathname === "/" : location.pathname.startsWith(to.split("?")[0]);
+  const isActive = (to: string) => {
+    if (to === "/") return location.pathname === "/";
+    if (to === "/library") {
+      // A podcast's own page and a playlist are both places inside the library.
+      return ["/library", "/subscriptions"].some(p => location.pathname.startsWith(p));
+    }
+    return location.pathname.startsWith(to);
+  };
 
   return (
     <nav
@@ -82,6 +89,7 @@ function BottomNav() {
           <button
             key={to}
             onClick={() => navigate(to)}
+            aria-current={active ? "page" : undefined}
             className={`relative flex-1 flex flex-col items-center justify-center gap-1 py-2.5 transition-colors ${
               active ? "text-indigo-400" : "text-gray-500 hover:text-gray-300"
             }`}
@@ -100,9 +108,67 @@ function BottomNav() {
   );
 }
 
+// ─── Header ───────────────────────────────────────────────────────────────────
+function Header() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { queue } = useQueue();
+  const [inbox, setInbox] = useState(0);
+
+  // Read once per app load, and again whenever the feed is returned to: a
+  // refresh started on Home is the usual reason this number changes.
+  useEffect(() => {
+    getInbox().then(r => setInbox(r.new)).catch(() => {});
+  }, [location.pathname === "/"]);
+
+  const onQueue = location.pathname.startsWith("/up-next");
+
+  return (
+    <header
+      className="sticky top-0 z-40 bg-gray-900 border-b border-gray-800 px-4 py-3 flex items-center gap-2"
+      style={{ paddingTop: "max(0.75rem, env(safe-area-inset-top))" }}
+    >
+      <button onClick={() => navigate("/")} className="font-bold text-indigo-400 text-lg tracking-tight">
+        ⚗️ DistillPod
+      </button>
+
+      <div className="flex-1" />
+
+      {inbox > 0 && !onQueue && (
+        <button
+          onClick={() => navigate("/")}
+          className="text-xs font-semibold bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/30 rounded-full px-2.5 min-h-[32px] transition-colors"
+        >
+          {inbox} new
+        </button>
+      )}
+
+      <button
+        onClick={() => navigate(onQueue ? "/" : "/up-next")}
+        aria-label={`Up Next (${queue.length})`}
+        className={`relative w-10 h-10 flex items-center justify-center rounded-full transition-colors ${
+          onQueue ? "text-indigo-400 bg-indigo-600/15" : "text-gray-400 hover:text-white hover:bg-gray-800"
+        }`}
+      >
+        <QueueIcon />
+        {queue.length > 0 && (
+          <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-indigo-500 text-white text-[10px] font-bold flex items-center justify-center">
+            {queue.length > 99 ? "99+" : queue.length}
+          </span>
+        )}
+      </button>
+    </header>
+  );
+}
+
 // ─── App shell (needs useAudio → must be inside AudioProvider) ────────────────
 function AppShell() {
   const { audioReady } = useAudio();
+  const hydrateQueue = useQueue(s => s.hydrate);
+
+  // Reconcile the queue with the server once, at startup — same contract as
+  // playback positions. Until it lands, the local mirror is what renders.
+  useEffect(() => { hydrateQueue(); }, [hydrateQueue]);
 
   // Prefetch all subscribed podcast episodes on mount (warm the cache silently)
   useEffect(() => {
@@ -118,12 +184,7 @@ function AppShell() {
 
   return (
     <div className="min-h-screen bg-gray-950 text-white flex flex-col">
-      <header
-        className="sticky top-0 z-40 bg-gray-900 border-b border-gray-800 px-4 py-3"
-        style={{ paddingTop: "max(0.75rem, env(safe-area-inset-top))" }}
-      >
-        <span className="font-bold text-indigo-400 text-lg tracking-tight">⚗️ DistillPod</span>
-      </header>
+      <Header />
 
       {/* Extra bottom padding when mini player is visible */}
       <main className={`flex-1 p-4 max-w-3xl mx-auto w-full transition-[padding] ${
@@ -132,12 +193,21 @@ function AppShell() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/search" element={<Search />} />
-          <Route path="/subscriptions" element={<Subscriptions />} />
+          <Route path="/library" element={<Library />} />
+          {/* Kept so links, bookmarks and back buttons from before the Library
+              gained sections still land somewhere sensible. */}
+          <Route path="/subscriptions" element={<Navigate to="/library" replace />} />
           <Route path="/subscriptions/:podcastId" element={<PodcastEpisodes />} />
+          <Route path="/library/playlists/:playlistId" element={<PlaylistDetail />} />
           <Route path="/player/:episodeId" element={<Player />} />
           <Route path="/player/:episodeId/chat" element={<Chat />} />
-          <Route path="/queue" element={<Queue />} />
-          <Route path="/gists" element={<Gists />} />
+          {/* "/up-next", not "/queue": the API owns /queue, and a hard reload
+              of an SPA path that an API route also matches serves JSON. Same
+              reason playlists live under /library. */}
+          <Route path="/up-next" element={<Queue />} />
+          <Route path="/queue" element={<Navigate to="/up-next" replace />} />
+          <Route path="/saved" element={<Saved />} />
+          <Route path="/gists" element={<Navigate to="/saved" replace />} />
           <Route path="*" element={<Home />} />
         </Routes>
       </main>

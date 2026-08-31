@@ -390,6 +390,31 @@ async def reset_stale_processing() -> int:
         await db.close()
 
 
+async def prune_media() -> None:
+    """Apply the retention policy, if one has been set.
+
+    Disabled by default (`retention_days = 0`), so this is a no-op until asked
+    for — deleting audio unprompted is not a surprise a nightly job should
+    hold. When it is on, only the audio goes: the transcript, chapters,
+    distills and bookmarks stay, so a cleared episode is still searchable,
+    still quotable, and downloads again on play.
+    """
+    from services import retention
+    try:
+        result = await retention.prune()
+    except Exception as exc:                      # never fail the whole sync
+        log.warning(f"Retention pass failed: {exc}")
+        return
+    if result["status"] == "disabled":
+        log.info("Retention is off — keeping all audio")
+        return
+    freed_mb = result["freed_bytes"] / (1024 * 1024)
+    log.info(
+        f"Retention: cleared {result['episodes']} episode(s) and "
+        f"{result['orphans']} orphan file(s), freeing {freed_mb:.0f} MB"
+    )
+
+
 async def report_errors() -> None:
     """
     After the sync run, check for episodes in 'error' state and notify via
@@ -472,6 +497,9 @@ async def main() -> None:
 
     # --- Fix 2: Report any episodes in error state via Telegram ---
     await report_errors()
+
+    # --- Keep the disk from filling up ---
+    await prune_media()
 
 
 if __name__ == "__main__":

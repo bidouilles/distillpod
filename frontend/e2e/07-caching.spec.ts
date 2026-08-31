@@ -17,7 +17,7 @@ test.describe("Suite 7 — Caching & State", () => {
   });
 
   test("7.2 library episode cache hit on return", async ({ page }) => {
-    await page.goto("/subscriptions");
+    await page.goto("/library");
     await page.waitForLoadState("networkidle");
 
     // Open episode list — wait for episodes to fully load (not networkidle, which is unreliable)

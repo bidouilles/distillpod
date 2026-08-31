@@ -34,8 +34,15 @@ export interface FeedFilters {
   tag_id?: string;
   podcast_id?: string;
   status?: string;
+  /** Never opened, on any device — read from server-side playback state. */
+  unplayed?: boolean;
+  min_minutes?: number;
+  max_minutes?: number;
+  sort?: FeedSort;
   limit?: number;
 }
+
+export type FeedSort = "newest" | "oldest" | "shortest" | "longest";
 
 export const getFeed = (filters: FeedFilters = {}) => {
   // Filtering runs server-side: the feed is capped, so filtering an
@@ -87,9 +94,14 @@ export const getEpisodes = (podcastId: string, refresh = false) =>
 
 // --- Player ---
 export const startPlay = (episodeId: string, audioUrl: string) =>
-  req<{ audio_url: string; transcript_status: string; status: "ready" | "downloading" }>(
-    "POST", "/player/play", { episode_id: episodeId, audio_url: audioUrl }
-  );
+  req<{
+    audio_url: string;
+    transcript_status: string;
+    status: "ready" | "downloading";
+    /** The podcast's preferences, returned here so the player has them at the
+     *  moment it needs them rather than a round trip later. */
+    settings?: PodcastSettings;
+  }>("POST", "/player/play", { episode_id: episodeId, audio_url: audioUrl });
 
 /** Downloads run server-side, so several can be fetched at once and none of
  *  them depend on a screen staying open. */
@@ -134,6 +146,7 @@ export interface Subscription {
   subscribed_at: string; tags?: Tag[];
   /** "podcast" | "youtube_channel" | "youtube_video" (one video, not subscribed). */
   source?: string;
+  settings?: PodcastSettings;
 }
 export interface Episode {
   id: string; podcast_id: string; title: string; description?: string;
@@ -145,6 +158,13 @@ export interface FeedEpisode extends Episode {
   podcast_title: string;
   podcast_image?: string;
   distill_count: number;
+  bookmark_count: number;
+  /** 0/1 from SQLite — already in Up Next. */
+  queued: number;
+  /** 0/1 — opened on some device. Server-side, so it does not lie across devices. */
+  played: number;
+  position: number;
+  created_at?: string;
 }
 export interface Suggestion {
   id: string; title: string; author?: string; description?: string;
@@ -344,3 +364,181 @@ export const startBackfill = () =>
 
 export const stopBackfill = () =>
   req<{ status: string }>("POST", "/player/backfill/stop");
+
+// --- Up Next (server-side) ---
+// The queue lives on the server for the same reason playback positions do: a
+// queue built on the laptop is only useful if the phone has it too. The store
+// in `stores/queueStore.ts` keeps a local mirror for instant, offline reads.
+export interface QueueRow {
+  episode_id: string;
+  title: string;
+  podcast_id?: string;
+  podcast_title?: string;
+  audio_url: string;
+  image_url?: string;
+  duration_seconds?: number;
+  transcript_status?: string;
+  added_at: string;
+}
+
+export const getQueue = () => req<QueueRow[]>("GET", "/queue");
+
+export const enqueueEpisode = (episodeId: string, position: "next" | "end" = "end") =>
+  req<QueueRow[]>("POST", `/queue/${episodeId}?position=${position}`);
+
+export const dequeueEpisode = (episodeId: string) =>
+  req<QueueRow[]>("DELETE", `/queue/${episodeId}`);
+
+export const replaceQueue = (episodeIds: string[]) =>
+  req<QueueRow[]>("PUT", "/queue", { episode_ids: episodeIds });
+
+export const clearQueue = () => req<QueueRow[]>("DELETE", "/queue");
+
+// --- Bookmarks ---
+// The cheap half of ⚗️: a distill costs a CLI round trip and ~30s, a bookmark
+// costs an INSERT. That difference is the whole point — it can be tapped as
+// often as it is useful.
+export interface Bookmark {
+  id: string;
+  episode_id: string;
+  start_seconds: number;
+  end_seconds: number;
+  text: string;
+  note?: string | null;
+  created_at: string;
+  episode_title?: string | null;
+  podcast_title?: string | null;
+  podcast_image?: string | null;
+}
+
+export const listBookmarks = (episodeId?: string) =>
+  req<Bookmark[]>("GET", episodeId ? `/bookmarks?episode_id=${episodeId}` : "/bookmarks");
+
+/** From the player: the server finds the sentence around `seconds`. */
+export const bookmarkMoment = (episodeId: string, seconds: number) =>
+  req<Bookmark>("POST", "/bookmarks", { episode_id: episodeId, seconds });
+
+/** From a transcript line, which already knows exactly which words it means. */
+export const bookmarkLine = (
+  episodeId: string, startSeconds: number, endSeconds: number, text: string,
+) => req<Bookmark>("POST", "/bookmarks", {
+  episode_id: episodeId, start_seconds: startSeconds, end_seconds: endSeconds, text,
+});
+
+export const annotateBookmark = (id: string, note: string) =>
+  req<Bookmark>("PATCH", `/bookmarks/${id}`, { note });
+
+export const deleteBookmark = (id: string) => req("DELETE", `/bookmarks/${id}`);
+
+// --- Playlists ---
+export interface PlaylistRules {
+  unplayed: boolean;
+  status?: string | null;
+  tag_id?: string | null;
+  podcast_id?: string | null;
+  min_minutes?: number | null;
+  max_minutes?: number | null;
+  sort: FeedSort;
+  limit: number;
+}
+
+export const EMPTY_RULES: PlaylistRules = {
+  unplayed: false, status: null, tag_id: null, podcast_id: null,
+  min_minutes: null, max_minutes: null, sort: "newest", limit: 50,
+};
+
+export interface Playlist {
+  id: string;
+  name: string;
+  kind: "manual" | "smart";
+  rules?: PlaylistRules | null;
+  created_at: string;
+  episode_count: number;
+  images: string[];
+}
+
+export const listPlaylists = () => req<Playlist[]>("GET", "/playlists");
+
+export const createPlaylist = (name: string, kind: "manual" | "smart", rules?: PlaylistRules) =>
+  req<Playlist>("POST", "/playlists", { name, kind, rules });
+
+export const getPlaylist = (id: string) =>
+  req<{ playlist: Playlist; episodes: FeedEpisode[] }>("GET", `/playlists/${id}`);
+
+export const updatePlaylist = (id: string, patch: { name?: string; rules?: PlaylistRules }) =>
+  req<Playlist>("PATCH", `/playlists/${id}`, patch);
+
+export const deletePlaylist = (id: string) => req("DELETE", `/playlists/${id}`);
+
+export const addToPlaylist = (id: string, episodeId: string) =>
+  req<{ status: string }>("POST", `/playlists/${id}/episodes/${episodeId}`);
+
+export const removeFromPlaylist = (id: string, episodeId: string) =>
+  req("DELETE", `/playlists/${id}/episodes/${episodeId}`);
+
+export const reorderPlaylist = (id: string, episodeIds: string[]) =>
+  req<{ status: string }>("PUT", `/playlists/${id}/episodes`, { episode_ids: episodeIds });
+
+export const queuePlaylist = (id: string, replace = false) =>
+  req<QueueRow[]>("POST", `/playlists/${id}/queue?replace=${replace}`);
+
+// --- Inbox ---
+// "Like email but for podcasts" needs something tracking the read line, and it
+// has to be server-side or "new" means new to this browser.
+export const getInbox = () =>
+  req<{ new: number; since: string | null }>("GET", "/podcasts/inbox");
+
+export const markInboxSeen = () =>
+  req<{ new: number; since: string }>("POST", "/podcasts/inbox/seen");
+
+// --- Per-podcast playback settings ---
+// Every field nullable, and null means "no opinion" rather than a stored
+// default: the player keeps whatever it was last set to.
+export interface PodcastSettings {
+  playback_rate?: number | null;
+  skip_intro?: number | null;
+  skip_outro?: number | null;
+  prefer_adfree?: boolean | null;
+  auto_transcribe?: boolean | null;
+}
+
+export const setPodcastSettings = (podcastId: string, settings: PodcastSettings) =>
+  req<PodcastSettings>("PUT", `/podcasts/${podcastId}/settings`, settings);
+
+// --- OPML ---
+/** A download, because the consumer is another podcast app, not this one. */
+export const opmlExportUrl = () => `${BASE}/podcasts/opml`;
+
+export const importOpml = (xml: string) =>
+  req<{ added: number; skipped: number; found: number; titles: string[] }>(
+    "POST", "/podcasts/opml", { xml },
+  );
+
+// --- Storage ---
+export interface StorageUsage {
+  total_bytes: number;
+  audio_bytes: number;
+  episodes: number;
+  orphan_bytes: number;
+  orphan_files: number;
+  by_podcast: { podcast_id: string; title: string; bytes: number; episodes: number }[];
+  policy: { days: number; played_only: boolean };
+}
+
+export interface PruneResult {
+  status: "disabled" | "dry_run" | "pruned";
+  freed_bytes: number;
+  episodes: number;
+  orphans: number;
+  cleared: { episode_id: string; title: string; bytes: number }[];
+}
+
+export const getStorage = () => req<StorageUsage>("GET", "/storage");
+
+export const setRetentionPolicy = (days: number, playedOnly: boolean) =>
+  req<{ days: number; played_only: boolean }>("PUT", "/storage/policy",
+    { days, played_only: playedOnly });
+
+export const pruneStorage = (dryRun: boolean, days?: number) =>
+  req<PruneResult>("POST",
+    `/storage/prune?dry_run=${dryRun}${days != null ? `&days=${days}` : ""}`);

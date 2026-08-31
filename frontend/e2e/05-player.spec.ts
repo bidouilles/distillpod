@@ -223,13 +223,13 @@ test.describe("Suite 5 — Player", () => {
     await expect(page.locator("text=⚗️ DistillPod")).toBeVisible();
   });
 
-  test("5.23 navigate from Gists → player → fullscreen loads at correct time", async ({
+  test("5.23 navigate from Saved → player → fullscreen loads at correct time", async ({
     page, request,
   }) => {
     await clearGists(request);
     await createGist(request, EPISODE_DONE_ID, 364);
 
-    await page.goto("/gists");
+    await page.goto("/saved");
     await page.waitForLoadState("domcontentloaded");
     // Gists page cards use rounded-xl (not rounded-2xl)
     await expect(page.locator(".bg-gray-900.rounded-xl").first()).toBeVisible({ timeout: 10_000 });

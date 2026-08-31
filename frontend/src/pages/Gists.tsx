@@ -244,7 +244,7 @@ function EpisodeRow({ episodeId, gists, imageUrl, onClick }: { episodeId: string
 }
 
 // ─── Main Gists page ──────────────────────────────────────────────────────────
-export default function Gists() {
+export default function Gists({ embedded = false }: { embedded?: boolean }) {
   const [allGists, setAllGists] = useState<Gist[]>([]);
   const [imageMap, setImageMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -296,14 +296,17 @@ export default function Gists() {
   // Episode list view
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-bold">Distillations</h1>
-        {allGists.length > 0 && (
-          <span className="text-sm text-gray-500">
-            {allGists.length} across {episodeIds.length} episode{episodeIds.length !== 1 ? "s" : ""}
-          </span>
-        )}
-      </div>
+      {/* Embedded in Saved, which supplies the heading and the count. */}
+      {!embedded && (
+        <div className="flex items-center justify-between">
+          <h1 className="text-lg font-bold">Distillations</h1>
+          {allGists.length > 0 && (
+            <span className="text-sm text-gray-500">
+              {allGists.length} across {episodeIds.length} episode{episodeIds.length !== 1 ? "s" : ""}
+            </span>
+          )}
+        </div>
+      )}
 
       {loading && (
         <div className="space-y-3">

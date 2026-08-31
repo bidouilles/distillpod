@@ -11,7 +11,14 @@ from config import settings
 # /chat and /research were missing here: both were reachable without a session
 # on a public deployment, letting anyone read episode conversations, post
 # messages that spend the owner's model subscription, and queue research jobs.
-PROTECTED_PREFIXES = ["/gists", "/podcasts", "/player", "/chat", "/research", "/tags", "/search", "/youtube"]
+#
+# Every new router belongs on this list. A route that is merely not listed is
+# not "unprotected pending review" — it is open, and reads or writes the
+# owner's library. /storage in particular can delete media.
+PROTECTED_PREFIXES = [
+    "/gists", "/podcasts", "/player", "/chat", "/research", "/tags", "/search",
+    "/youtube", "/queue", "/bookmarks", "/playlists", "/storage",
+]
 
 
 def create_session_token(user: dict) -> str:

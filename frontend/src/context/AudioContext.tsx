@@ -4,7 +4,7 @@ import {
 } from "react";
 import {
   startPlay, getEpisode, audioStreamUrl, getProgress, putProgress,
-  getDownloadStatus, type Episode,
+  getDownloadStatus, type Episode, type PodcastSettings,
 } from "../api/client";
 import { useQueue } from "../stores/queueStore";
 
@@ -130,6 +130,9 @@ export type PlayableEpisode = Episode & {
   podcast_title?: string;
 };
 
+/** Off, counting down to a time, or stopping when this episode ends. */
+export type SleepMode = "off" | "time" | "episode";
+
 interface AudioContextValue {
   episode:           PlayableEpisode | null;
   audioRef:          RefObject<HTMLAudioElement | null>;
@@ -142,7 +145,15 @@ interface AudioContextValue {
   togglePlay:        () => void;
   seek:              (secs: number) => void;
   skipBy:            (delta: number) => void;
+  rate:              number;
   setRate:           (rate: number) => void;
+  /** The current podcast's preferences, as returned by /player/play. */
+  settings:          PodcastSettings;
+  sleepMode:         SleepMode;
+  /** Seconds left when counting down to a time; null otherwise. */
+  sleepRemaining:    number | null;
+  /** Minutes, "episode", or null to cancel. */
+  setSleepTimer:     (value: number | "episode" | null) => void;
   playerExpanded:    boolean;
   setPlayerExpanded: (v: boolean) => void;
 }
@@ -155,8 +166,19 @@ export function AudioProvider({ children }: { children: ReactNode }) {
   const loadedIdRef  = useRef<string | null>(null); // prevents double-loading same episode
   const episodeRef   = useRef<PlayableEpisode | null>(null); // for access inside event listeners
   const lastSaveRef  = useRef<number>(0);            // throttle: last progress-save timestamp
+  const settingsRef  = useRef<PodcastSettings>({});  // for access inside event listeners
+  const sleepAtEndRef = useRef(false);
+  const outroDoneRef = useRef<string | null>(null);  // episode whose outro was skipped
 
   const loadEpisodeRef = useRef<AudioContextValue["loadEpisode"] | null>(null);
+
+  // Playback rate lives here rather than in the player sheet: a per-podcast
+  // preference has to survive the sheet being closed, and the sheet unmounts.
+  const [rate,           setRateState]      = useState(1);
+  const [settings,       setSettings]       = useState<PodcastSettings>({});
+  const [sleepUntil,     setSleepUntil]     = useState<number | null>(null);
+  const [sleepAtEnd,     setSleepAtEnd]     = useState(false);
+  const [sleepRemaining, setSleepRemaining] = useState<number | null>(null);
 
   const [episode,        setEpisode]        = useState<PlayableEpisode | null>(null);
   const [isPlaying,      setIsPlaying]      = useState(false);
@@ -169,6 +191,8 @@ export function AudioProvider({ children }: { children: ReactNode }) {
 
   // Keep episodeRef in sync for use inside event listeners
   useEffect(() => { episodeRef.current = episode; }, [episode]);
+  useEffect(() => { settingsRef.current = settings; }, [settings]);
+  useEffect(() => { sleepAtEndRef.current = sleepAtEnd; }, [sleepAtEnd]);
 
   // ── Media Session: update metadata when episode changes ─────────────────
   useEffect(() => {
@@ -228,6 +252,18 @@ export function AudioProvider({ children }: { children: ReactNode }) {
 
     const onTime = () => {
       setCurrentTime(audio.currentTime);
+      // Skip outro: a show with a two-minute sign-off every week should not
+      // need the same manual skip every week. Seeking to the end lets the
+      // ordinary `ended` path run, so auto-advance and progress behave
+      // identically to reaching the end on foot.
+      const outro = settingsRef.current.skip_outro;
+      if (outro && audio.duration > outro && loadedIdRef.current
+          && outroDoneRef.current !== loadedIdRef.current
+          && audio.currentTime >= audio.duration - outro) {
+        outroDoneRef.current = loadedIdRef.current;
+        audio.currentTime = audio.duration;
+        return;
+      }
       // Throttled progress save (every 5 s)
       const now = Date.now();
       if (loadedIdRef.current && now - lastSaveRef.current > 5_000) {
@@ -259,6 +295,12 @@ export function AudioProvider({ children }: { children: ReactNode }) {
       if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
       // Episode finished — clear saved progress
       if (loadedIdRef.current) clearProgress(loadedIdRef.current);
+      // Sleeping at the end of this episode means exactly that: not the end of
+      // the next one the queue would have started.
+      if (sleepAtEndRef.current) {
+        setSleepAtEnd(false);
+        return;
+      }
       // Auto-advance: play next item from queue
       const next = useQueue.getState().shift();
       if (next && loadEpisodeRef.current) {
@@ -350,6 +392,23 @@ export function AudioProvider({ children }: { children: ReactNode }) {
       if (!ready) return;          // failed — leave the player as it was
     }
 
+    // The podcast's own preferences, applied before the first frame of audio.
+    // `null` means "no opinion", so the rate the listener last chose stands.
+    const podcastSettings = started.settings ?? {};
+    setSettings(podcastSettings);
+    settingsRef.current = podcastSettings;
+    outroDoneRef.current = null;
+    if (podcastSettings.playback_rate) {
+      setRateState(podcastSettings.playback_rate);
+      audio.playbackRate = podcastSettings.playback_rate;
+    }
+    // Skipping the intro is only right when starting from the top: resuming
+    // half way through an episode, or jumping to a distilled moment, means
+    // something else entirely.
+    if (seekTo == null && podcastSettings.skip_intro) {
+      seekTo = podcastSettings.skip_intro;
+    }
+
     // Swap src
     loadedIdRef.current = id;
     setEpisode(resolved);
@@ -398,15 +457,76 @@ export function AudioProvider({ children }: { children: ReactNode }) {
     if (audio) audio.currentTime = Math.max(0, Math.min(audio.currentTime + delta, duration));
   }, [duration]);
 
-  const setRate = useCallback((rate: number) => {
+  const setRate = useCallback((next: number) => {
     const audio = audioRef.current;
-    if (audio) audio.playbackRate = rate;
+    setRateState(next);
+    if (audio) audio.playbackRate = next;
   }, []);
+
+  // Keep the element's rate through a source swap — the ad-free toggle
+  // reassigns `src`, and a fresh load resets playbackRate to 1.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const apply = () => { audio.playbackRate = rate; };
+    audio.addEventListener("loadedmetadata", apply);
+    apply();
+    return () => audio.removeEventListener("loadedmetadata", apply);
+  }, [rate, episode?.id]);
+
+  const setSleepTimer = useCallback((value: number | "episode" | null) => {
+    const audio = audioRef.current;
+    if (audio) audio.volume = 1;             // cancel a fade in progress
+    if (value === null) {
+      setSleepUntil(null);
+      setSleepAtEnd(false);
+      setSleepRemaining(null);
+      return;
+    }
+    if (value === "episode") {
+      setSleepUntil(null);
+      setSleepRemaining(null);
+      setSleepAtEnd(true);
+      return;
+    }
+    setSleepAtEnd(false);
+    setSleepUntil(Date.now() + value * 60_000);
+    setSleepRemaining(value * 60);
+  }, []);
+
+  // Count down, fade out, pause.
+  //
+  // Wall-clock rather than playback time, because a sleep timer is about the
+  // person falling asleep, not the audio: pausing to say something and coming
+  // back should not extend the night. The last few seconds fade, since silence
+  // arriving abruptly is its own kind of wake-up.
+  useEffect(() => {
+    if (sleepUntil == null) return;
+    const FADE_SECONDS = 8;
+    const tick = setInterval(() => {
+      const audio = audioRef.current;
+      const remaining = Math.max(0, Math.round((sleepUntil - Date.now()) / 1000));
+      setSleepRemaining(remaining);
+      if (!audio) return;
+      if (remaining <= 0) {
+        audio.pause();
+        audio.volume = 1;
+        setSleepUntil(null);
+        setSleepRemaining(null);
+        return;
+      }
+      audio.volume = remaining <= FADE_SECONDS ? Math.max(0.05, remaining / FADE_SECONDS) : 1;
+    }, 1000);
+    return () => clearInterval(tick);
+  }, [sleepUntil]);
+
+  const sleepMode: SleepMode = sleepUntil != null ? "time" : sleepAtEnd ? "episode" : "off";
 
   return (
     <Ctx.Provider value={{
       episode, audioRef, isPlaying, currentTime, duration, audioReady, preparing,
-      loadEpisode, togglePlay, seek, skipBy, setRate,
+      loadEpisode, togglePlay, seek, skipBy, rate, setRate, settings,
+      sleepMode, sleepRemaining, setSleepTimer,
       playerExpanded, setPlayerExpanded,
     }}>
       {/* Single persistent audio element — never unmounts */}

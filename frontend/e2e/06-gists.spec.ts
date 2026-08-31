@@ -1,22 +1,22 @@
 import { test, expect } from "@playwright/test";
 import { clearGists, createGist, EPISODE_DONE_ID } from "./helpers";
 
-// Back button in episode gist list says "Gists" — scope to main to avoid nav tab clash
-const gistsBackBtn = (page: any) => page.locator("main").getByRole("button", { name: "Gists" });
+// Back button in the episode gist list says "Distillations" — scope to main
+const gistsBackBtn = (page: any) => page.locator("main").getByRole("button", { name: "Distillations" });
 
-test.describe("Suite 6 — Gists Page", () => {
+test.describe("Suite 6 — Saved: distillations", () => {
 
   test("6.1 empty state — No gists yet.", async ({ page, request }) => {
     await clearGists(request);
-    await page.goto("/gists");
+    await page.goto("/saved");
     await page.waitForLoadState("networkidle");
-    await expect(page.locator("text=No gists yet.")).toBeVisible();
+    await expect(page.locator("text=No distillations yet.")).toBeVisible();
   });
 
   test("6.2 episode row — title, gist count pill", async ({ page, request }) => {
     await clearGists(request);
     await createGist(request, EPISODE_DONE_ID, 364);
-    await page.goto("/gists");
+    await page.goto("/saved");
     await page.waitForLoadState("networkidle");
 
     await expect(page.locator(".bg-gray-900.rounded-xl").first()).toBeVisible();
@@ -27,7 +27,7 @@ test.describe("Suite 6 — Gists Page", () => {
   test("6.3 last gisted date visible", async ({ page, request }) => {
     await clearGists(request);
     await createGist(request, EPISODE_DONE_ID, 364);
-    await page.goto("/gists");
+    await page.goto("/saved");
     await page.waitForLoadState("networkidle");
 
     await expect(page.locator("text=/Last gist/i")).toBeVisible({ timeout: 5_000 });
@@ -37,7 +37,7 @@ test.describe("Suite 6 — Gists Page", () => {
   test("6.5 tap episode → drill down to gist list", async ({ page, request }) => {
     await clearGists(request);
     await createGist(request, EPISODE_DONE_ID, 364);
-    await page.goto("/gists");
+    await page.goto("/saved");
     await page.waitForLoadState("networkidle");
 
     await page.locator(".bg-gray-900.rounded-xl").first().click();
@@ -51,7 +51,7 @@ test.describe("Suite 6 — Gists Page", () => {
   test("6.7 back button → returns to episode list", async ({ page, request }) => {
     await clearGists(request);
     await createGist(request, EPISODE_DONE_ID, 364);
-    await page.goto("/gists");
+    await page.goto("/saved");
     await page.waitForLoadState("networkidle");
 
     await page.locator(".bg-gray-900.rounded-xl").first().click();
@@ -66,7 +66,7 @@ test.describe("Suite 6 — Gists Page", () => {
   test("6.8 Play button → navigates to /player/:id", async ({ page, request }) => {
     await clearGists(request);
     await createGist(request, EPISODE_DONE_ID, 364);
-    await page.goto("/gists");
+    await page.goto("/saved");
     await page.waitForLoadState("networkidle");
 
     await page.locator(".bg-gray-900.rounded-xl").first().click();
@@ -80,7 +80,7 @@ test.describe("Suite 6 — Gists Page", () => {
   test("6.10 non-AI gist card → raw transcript text", async ({ page, request }) => {
     await clearGists(request);
     await createGist(request, EPISODE_DONE_ID, 364);
-    await page.goto("/gists");
+    await page.goto("/saved");
     await page.waitForLoadState("networkidle");
 
     await page.locator(".bg-gray-900.rounded-xl").first().click();
@@ -97,7 +97,7 @@ test.describe("Suite 6 — Gists Page", () => {
     await clearGists(request);
     await createGist(request, EPISODE_DONE_ID, 364);
     await createGist(request, EPISODE_DONE_ID, 200);
-    await page.goto("/gists");
+    await page.goto("/saved");
     await page.waitForLoadState("networkidle");
 
     await page.locator(".bg-gray-900.rounded-xl").first().click();
@@ -118,7 +118,7 @@ test.describe("Suite 6 — Gists Page", () => {
   test("6.15 delete last gist → returns to episode list", async ({ page, request }) => {
     await clearGists(request);
     await createGist(request, EPISODE_DONE_ID, 364);
-    await page.goto("/gists");
+    await page.goto("/saved");
     await page.waitForLoadState("networkidle");
 
     await page.locator(".bg-gray-900.rounded-xl").first().click();
@@ -129,13 +129,13 @@ test.describe("Suite 6 — Gists Page", () => {
     await page.waitForTimeout(600);
 
     // After deleting the only gist, onAllDeleted fires → episode list shows "No gists yet."
-    const emptyOrList = page.locator("text=No gists yet.").or(page.locator("text=/Last gist/i"));
+    const emptyOrList = page.locator("text=No distillations yet.").or(page.locator("text=/Last gist/i"));
     await expect(emptyOrList).toBeVisible({ timeout: 5_000 });
     await clearGists(request);
   });
 
-  test("6.16 SPA reload /gists → page loads", async ({ page }) => {
-    await page.goto("/gists");
+  test("6.16 SPA reload /saved → page loads", async ({ page }) => {
+    await page.goto("/saved");
     await page.reload();
     await page.waitForLoadState("networkidle");
     const body = await page.textContent("body");

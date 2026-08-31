@@ -6,7 +6,7 @@ const backBtn = (page: any) => page.locator("main").getByRole("button", { name: 
 test.describe("Suite 4 — Library", () => {
 
   test.beforeEach(async ({ page }) => {
-    await page.goto("/subscriptions");
+    await page.goto("/library");
     await page.waitForLoadState("networkidle");
   });
 

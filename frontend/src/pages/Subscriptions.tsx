@@ -6,6 +6,9 @@ import { getSubscriptions, getEpisodes, unsubscribe, Subscription, Episode, Tag 
 import { getCached, setCached, bustCache } from "../cache";
 import TagEditor from "../components/TagEditor";
 import EpisodeListFilter, { filterEpisodes } from "../components/EpisodeListFilter";
+import PodcastSettingsEditor from "../components/PodcastSettingsEditor";
+import OpmlControls from "../components/OpmlControls";
+import { type PodcastSettings } from "../api/client";
 
 const TrashIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
@@ -39,6 +42,7 @@ function fmtDuration(secs?: number | null) {
 // ─── Episode List View ────────────────────────────────────────────────────────
 function EpisodeList({ sub, onUnsubscribed }: { sub: Subscription; onUnsubscribed: () => void }) {
   const [tags, setTags] = useState<Tag[]>(sub.tags ?? []);
+  const [settings, setSettings] = useState<PodcastSettings>(sub.settings ?? {});
   const nav = useNavigate();
   const cacheKey = `episodes:${sub.podcast_id}`;
   const [episodes, setEpisodes] = useState<Episode[]>(() => getCached<Episode[]>(cacheKey) || []);
@@ -73,7 +77,7 @@ function EpisodeList({ sub, onUnsubscribed }: { sub: Subscription; onUnsubscribe
       bustCache("home:feed");
       bustCache("home:shotCounts");
       bustCache(`episodes:${sub.podcast_id}`);
-      nav('/subscriptions');
+      nav('/library');
       onUnsubscribed();
     } finally {
       setUnsubbing(false);
@@ -85,7 +89,7 @@ function EpisodeList({ sub, onUnsubscribed }: { sub: Subscription; onUnsubscribe
       {/* Header */}
       <div className="flex items-center gap-3">
         <button
-          onClick={() => nav('/subscriptions')}
+          onClick={() => nav('/library')}
           className="flex items-center gap-1.5 text-indigo-400 hover:text-indigo-300 active:text-indigo-500 transition-colors py-2 pr-2 -ml-1"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
@@ -125,6 +129,12 @@ function EpisodeList({ sub, onUnsubscribed }: { sub: Subscription; onUnsubscribe
         podcastId={sub.podcast_id}
         value={tags}
         onChange={setTags}
+      />
+
+      <PodcastSettingsEditor
+        podcastId={sub.podcast_id}
+        value={settings}
+        onChange={setSettings}
       />
 
       {/* Loading skeletons */}
@@ -215,21 +225,24 @@ export function PodcastEpisodes() {
   return (
     <EpisodeList
       sub={sub}
-      onUnsubscribed={() => nav('/subscriptions')}
+      onUnsubscribed={() => nav('/library')}
     />
   );
 }
 
-// ─── Podcast List View (routed: /subscriptions) ───────────────────────────────
-export default function Subscriptions() {
+// ─── Shows: the subscription list ─────────────────────────────────────────────
+// Rendered as a section of the Library rather than a screen of its own, so
+// `embedded` drops the heading the Library already provides.
+export default function Subscriptions({ embedded = false }: { embedded?: boolean }) {
   const nav = useNavigate();
   const [subs, setSubs] = useState<Subscription[]>([]);
 
-  useEffect(() => { getSubscriptions().then(setSubs); }, []);
+  const load = () => { getSubscriptions().then(setSubs).catch(() => {}); };
+  useEffect(load, []);
 
   return (
     <div className="space-y-3">
-      <h1 className="text-lg font-bold">Library</h1>
+      {!embedded && <h1 className="text-lg font-bold">Library</h1>}
 
       {subs.length === 0 && (
         <div className="text-center py-12 text-gray-500">
@@ -261,6 +274,10 @@ export default function Subscriptions() {
           <span className="text-gray-600 text-lg">›</span>
         </div>
       ))}
+
+      <div className="pt-2">
+        <OpmlControls onImported={load} />
+      </div>
     </div>
   );
 }

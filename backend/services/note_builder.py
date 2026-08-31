@@ -225,6 +225,7 @@ def build_markdown(
     chapters: list[dict],
     gists: list[dict],
     extras: Optional[dict] = None,
+    bookmarks: Optional[list[dict]] = None,
 ) -> str:
     """Assemble the note. Every section is omitted when it has nothing in it."""
     title = episode.get("title") or "Untitled episode"
@@ -300,6 +301,25 @@ def build_markdown(
                 out.append("")
             out.append(f"— {stamp}{'  *(auto)*' if g.get('auto') else ''}")
             out.append("")
+
+    # Kept separate from Highlights rather than merged into one list. A distill
+    # is the model's reading of a moment; a bookmark is the listener's. In a
+    # vault six months later, which of the two said a thing is the difference
+    # between a quote you can stand behind and one you have to go and check.
+    if bookmarks:
+        out += ["## Bookmarks", ""]
+        for b in bookmarks:
+            start = b.get("start_seconds") or 0
+            link = _deep_link(audio_url, start)
+            stamp = f"[{_fmt_time(start)}]({link})" if link else _fmt_time(start)
+            text = (b.get("text") or "").strip()
+            if not text:
+                continue
+            out += [f"> {text}", ""]
+            note = (b.get("note") or "").strip()
+            if note:
+                out += [note, ""]
+            out += [f"— {stamp}", ""]
 
     if chapters:
         out += ["## Chapters", ""]

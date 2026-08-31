@@ -4,12 +4,15 @@ import LiveTranscript from "./LiveTranscript";
 import { useAudio } from "../context/AudioContext";
 import {
   getTranscriptStatus, getAdFreeStatus, getChapters, createGist,
-  adFreeAudioUrl,
+  adFreeAudioUrl, bookmarkMoment,
   type AdFreeStatus, type ChaptersResult,
 } from "../api/client";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
-const SPEEDS = [1, 1.5, 2, 0.5];
+const SPEEDS = [1, 1.2, 1.5, 1.8, 2, 0.5];
+
+/** Sleep timer choices, in minutes, plus "this episode". */
+const SLEEP_CHOICES = [15, 30, 45, 60];
 
 function fmtTime(secs: number) {
   if (!isFinite(secs) || isNaN(secs)) return "0:00";
@@ -49,12 +52,12 @@ function TranscriptBadge({ status, onOpen }: { status: string; onOpen: () => voi
 export default function FullscreenPlayer() {
   const {
     episode, audioRef, isPlaying, currentTime, duration,
-    audioReady, togglePlay, skipBy, setRate,
+    audioReady, togglePlay, skipBy, rate, setRate, settings,
+    sleepMode, sleepRemaining, setSleepTimer,
     playerExpanded, setPlayerExpanded,
   } = useAudio();
 
-  // Playback controls state
-  const [speedIdx, setSpeedIdx]           = useState(0);
+  const [sleepOpen, setSleepOpen]         = useState(false);
   // Episode-specific data
   const [transcriptStatus, setTranscriptStatus] = useState("none");
   const [adFreeStatus, setAdFreeStatus]   = useState<AdFreeStatus | null>(null);
@@ -67,6 +70,10 @@ export default function FullscreenPlayer() {
   const [gisting, setGisting]             = useState(false);
   const [gistFlash, setGistFlash]         = useState(false);
   const [gistCreated, setGistCreated]     = useState(false);
+  // Bookmark state. Separate from the distill flash because the two are
+  // different promises: one returns in a millisecond, the other in ~30s.
+  const [marking, setMarking]             = useState(false);
+  const [markCount, setMarkCount]         = useState(0);
   // Error
   const [error, setError]                 = useState("");
   // Swipe gesture
@@ -79,7 +86,6 @@ export default function FullscreenPlayer() {
   const currentChapter = currentChapterIndex >= 0 ? chapters[currentChapterIndex] : null;
   const progress       = duration > 0 ? (currentTime / duration) * 100 : 0;
   const remaining      = duration - currentTime;
-  const speed          = SPEEDS[speedIdx];
 
   // ── History integration: back gesture closes the player ─────────────────────
   // Push a sentinel history entry when the player opens so the browser back
@@ -109,11 +115,18 @@ export default function FullscreenPlayer() {
 
     setTranscriptStatus("none");
     setAdFreeStatus(null);
+    // Reset the source choice with the episode. Left set, it applied to the
+    // next episode too: its toggle rendered as "Ad-free" the moment its status
+    // arrived, and the swap effect then pointed the player at a cut that may
+    // not exist. A per-podcast `prefer_adfree` is re-applied below.
+    setUseAdFree(false);
     setChaptersData(null);
     setChaptersOpen(false);
     setTranscriptOpen(false);
     setError("");
     setGistCreated(false);
+    setMarkCount(0);
+    setSleepOpen(false);
 
     getTranscriptStatus(id).then(({ status }) => setTranscriptStatus(status)).catch(() => {});
     getAdFreeStatus(id).then(setAdFreeStatus).catch(() => {});
@@ -143,6 +156,13 @@ export default function FullscreenPlayer() {
     return () => { if (pollRef.current) clearTimeout(pollRef.current); };
   }, [episode?.id, transcriptStatus]);
 
+  // A show can ask for the ad-free cut by default, so the toggle starts where
+  // its settings say rather than always on the original. Waits for the cut to
+  // actually exist — ad detection runs after transcription.
+  useEffect(() => {
+    if (adFreeStatus?.has_adfree && settings.prefer_adfree) setUseAdFree(true);
+  }, [adFreeStatus?.has_adfree, settings.prefer_adfree, episode?.id]);
+
   // ── Ad-free source swap ──────────────────────────────────────────────────────
   useEffect(() => {
     const audio = audioRef.current;
@@ -166,9 +186,8 @@ export default function FullscreenPlayer() {
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
   const cycleSpeed = () => {
-    const next = (speedIdx + 1) % SPEEDS.length;
-    setSpeedIdx(next);
-    setRate(SPEEDS[next]);
+    const at = SPEEDS.indexOf(rate);
+    setRate(SPEEDS[(at + 1) % SPEEDS.length] ?? 1);
   };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -196,6 +215,27 @@ export default function FullscreenPlayer() {
       setError(e.message);
     } finally {
       setGisting(false);
+    }
+  };
+
+  // Keeping a quote, without a model call. The whole point is that this can be
+  // tapped six times on a drive: ⚗️ costs ~30s of waiting, this costs an INSERT,
+  // so the two need different buttons rather than one with a mode.
+  const handleBookmark = async () => {
+    if (!audioRef.current || !episode?.id || marking) return;
+    setMarking(true);
+    setError("");
+    try {
+      await bookmarkMoment(episode.id, audioRef.current.currentTime);
+      setMarkCount(n => n + 1);
+    } catch (e: any) {
+      setError(
+        transcriptStatus === "done"
+          ? "Nothing transcribed around that moment"
+          : "Bookmarks need the transcript — still working on it",
+      );
+    } finally {
+      setMarking(false);
     }
   };
 
@@ -368,9 +408,10 @@ export default function FullscreenPlayer() {
               {/* Speed */}
               <button
                 onClick={cycleSpeed}
+                aria-label={`Playback speed ${rate}x`}
                 className="w-10 h-10 flex items-center justify-center text-white/60 hover:text-white text-sm font-bold rounded-full hover:bg-white/10 transition-colors"
               >
-                {speed === 1 ? "1×" : `${speed}×`}
+                {rate === 1 ? "1×" : `${rate}×`}
               </button>
 
               {/* Skip back 10s */}
@@ -416,34 +457,67 @@ export default function FullscreenPlayer() {
                 </svg>
               </button>
 
-              {/* Gist flash indicator (symmetry slot) */}
-              <div className="w-10 h-10 flex items-center justify-center">
-                {gistCreated && (
-                  <span className="text-lg" title="Distill saved">⚗️</span>
+              {/* Sleep timer. Occupies what used to be a spacer holding a
+                  ⚗️ tick — the same information now lives on the Distill
+                  button itself, and bedtime listening had no control at all. */}
+              <button
+                onClick={() => setSleepOpen(o => !o)}
+                aria-label="Sleep timer"
+                className={`w-10 h-10 flex items-center justify-center rounded-full transition-colors ${
+                  sleepMode !== "off"
+                    ? "text-indigo-300 bg-indigo-500/20"
+                    : "text-white/60 hover:text-white hover:bg-white/10"
+                }`}
+              >
+                {sleepMode === "time" && sleepRemaining != null ? (
+                  <span className="text-[11px] font-bold font-mono">
+                    {Math.ceil(sleepRemaining / 60)}m
+                  </span>
+                ) : (
+                  <span className="text-base">{sleepMode === "episode" ? "🌙" : "☾"}</span>
                 )}
-              </div>
+              </button>
             </div>
 
-            {/* ── Distill button ── */}
-            <button
-              onClick={handleGist}
-              disabled={gisting || transcriptStatus !== "done"}
-              className={`w-full py-3.5 rounded-2xl font-semibold text-sm transition-all active:scale-[0.98] ${
-                gistFlash
-                  ? "bg-green-500/70 text-white scale-[0.98]"
-                  : transcriptStatus === "done"
-                    ? "bg-white/15 hover:bg-white/20 text-white"
+            {/* ── Keep this moment: the cheap way and the expensive way ──
+                Bookmark first, because it is the one that can be tapped
+                repeatedly: it stores the sentence being spoken and returns at
+                once. Distill sends the same moment to the agent CLI for a quote
+                and an insight, which is worth the ~30s only now and then. */}
+            <div className="flex gap-2">
+              <button
+                onClick={handleBookmark}
+                disabled={marking || transcriptStatus !== "done"}
+                className={`flex-1 py-3.5 rounded-2xl font-semibold text-sm transition-all active:scale-[0.98] ${
+                  transcriptStatus === "done"
+                    ? "bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-200"
                     : "bg-white/5 text-white/30 cursor-not-allowed"
-              }`}
-            >
-              {gisting
-                ? "Distilling…"
-                : transcriptStatus === "done"
-                  ? "⚗️  Distill this moment"
-                  : transcriptStatus === "processing" || transcriptStatus === "queued"
-                    ? "⏳  Transcribing…"
-                    : "⏳  Waiting for transcript"}
-            </button>
+                }`}
+              >
+                {marking ? "Keeping…" : markCount > 0 ? `🔖  Kept ${markCount}` : "🔖  Bookmark"}
+              </button>
+              <button
+                onClick={handleGist}
+                disabled={gisting || transcriptStatus !== "done"}
+                className={`flex-1 py-3.5 rounded-2xl font-semibold text-sm transition-all active:scale-[0.98] ${
+                  gistFlash
+                    ? "bg-green-500/70 text-white scale-[0.98]"
+                    : transcriptStatus === "done"
+                      ? "bg-white/15 hover:bg-white/20 text-white"
+                      : "bg-white/5 text-white/30 cursor-not-allowed"
+                }`}
+              >
+                {gisting
+                  ? "Distilling…"
+                  : gistCreated
+                    ? "⚗️  Distilled"
+                    : transcriptStatus === "done"
+                      ? "⚗️  Distill"
+                      : transcriptStatus === "processing" || transcriptStatus === "queued"
+                        ? "⏳  Transcribing…"
+                        : "⏳  No transcript"}
+              </button>
+            </div>
 
             {/* ── Ad-free toggle ── */}
             {adFreeStatus?.has_adfree && (
@@ -500,6 +574,69 @@ export default function FullscreenPlayer() {
             <div className="flex justify-center pb-2">
               <TranscriptBadge status={transcriptStatus} onOpen={() => { setChaptersOpen(false); setTranscriptOpen(true); }} />
             </div>
+          </div>
+        </div>
+
+        {/* ── Sleep timer sheet ── */}
+        {sleepOpen && (
+          <div className="absolute inset-0 z-10 bg-black/50" onClick={() => setSleepOpen(false)} />
+        )}
+        <div
+          className={`absolute inset-x-0 bottom-0 z-20 bg-gray-950 rounded-t-3xl transition-all duration-300 ease-out ${
+            sleepOpen ? "translate-y-0" : "translate-y-full opacity-0 pointer-events-none"
+          }`}
+          style={{ paddingBottom: "max(env(safe-area-inset-bottom), 16px)" }}
+        >
+          <div className="flex justify-center pt-3 pb-1">
+            <div className="w-10 h-1 bg-white/20 rounded-full" />
+          </div>
+          <div className="flex items-center justify-between px-5 py-3 border-b border-gray-800/60">
+            <div>
+              <div className="text-sm font-bold text-white">Sleep timer</div>
+              <div className="text-[11px] text-white/40">
+                {sleepMode === "time" && sleepRemaining != null
+                  ? `Fading out in ${fmtTime(sleepRemaining)}`
+                  : sleepMode === "episode"
+                    ? "Stopping at the end of this episode"
+                    : "Fades out and pauses — the queue does not carry on"}
+              </div>
+            </div>
+            <button
+              onClick={() => setSleepOpen(false)}
+              aria-label="Close sleep timer"
+              className="-mr-2 w-11 h-11 flex items-center justify-center text-gray-400 hover:text-white"
+            >
+              <span className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-800 text-lg leading-none">×</span>
+            </button>
+          </div>
+          <div className="px-5 py-4 flex flex-wrap gap-2">
+            {SLEEP_CHOICES.map(mins => (
+              <button
+                key={mins}
+                onClick={() => { setSleepTimer(mins); setSleepOpen(false); }}
+                className="min-h-[44px] px-4 rounded-full bg-gray-800 hover:bg-gray-700 text-sm text-gray-200 font-medium transition-colors"
+              >
+                {mins} min
+              </button>
+            ))}
+            <button
+              onClick={() => { setSleepTimer("episode"); setSleepOpen(false); }}
+              className={`min-h-[44px] px-4 rounded-full text-sm font-medium transition-colors ${
+                sleepMode === "episode"
+                  ? "bg-indigo-600 text-white"
+                  : "bg-gray-800 hover:bg-gray-700 text-gray-200"
+              }`}
+            >
+              End of episode
+            </button>
+            {sleepMode !== "off" && (
+              <button
+                onClick={() => { setSleepTimer(null); setSleepOpen(false); }}
+                className="min-h-[44px] px-4 rounded-full bg-red-600/20 hover:bg-red-600/30 text-sm text-red-300 font-medium transition-colors"
+              >
+                Cancel timer
+              </button>
+            )}
           </div>
         </div>
 
@@ -588,7 +725,7 @@ export default function FullscreenPlayer() {
           <div className="flex items-center justify-between px-5 py-3 border-b border-gray-800/60 flex-shrink-0">
             <div className="min-w-0">
               <div className="text-sm font-bold text-white">Transcript</div>
-              <div className="text-[11px] text-white/40">Tap any line to jump there</div>
+              <div className="text-[11px] text-white/40">Tap a line to jump · hold to bookmark</div>
             </div>
             <button
               onClick={() => setTranscriptOpen(false)}
@@ -609,6 +746,7 @@ export default function FullscreenPlayer() {
               audioRef={audioRef}
               open={transcriptOpen}
               onSeek={(secs) => { const a = audioRef.current; if (a) a.currentTime = secs; }}
+              onBookmarked={() => setMarkCount(n => n + 1)}
             />
           )}
         </div>

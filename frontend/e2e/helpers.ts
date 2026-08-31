@@ -40,12 +40,12 @@ export async function openFullscreenPlayer(page: Page) {
   await page.getByRole("button", { name: /^(Play|Resume|Now Playing)$/ }).first().click();
   // Fullscreen player renders only once episode+audioReady; wait for its distill button
   await expect(
-    page.getByRole("button", { name: /Distill this moment|Waiting for transcript|Transcribing/ })
+    page.getByRole("button", { name: /Distill|No transcript|Transcribing/ }).first()
   ).toBeVisible({ timeout: 30_000 });
 }
 
 /** Navigate to a tab via bottom nav (scoped to <nav> to avoid ambiguity with page buttons) */
-export async function goTo(page: Page, tab: "Home" | "Search" | "Library" | "Gists") {
+export async function goTo(page: Page, tab: "Home" | "Search" | "Library" | "Saved") {
   await page.locator("nav").getByRole("button", { name: tab }).click();
   await page.waitForLoadState("networkidle");
 }

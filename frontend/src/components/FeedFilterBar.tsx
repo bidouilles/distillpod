@@ -1,25 +1,52 @@
 import { useEffect, useRef, useState } from "react";
-import { Tag } from "../api/client";
+import { type FeedSort, type Tag } from "../api/client";
+
+export type LengthBand = "" | "short" | "medium" | "long";
 
 export interface FeedFilterState {
   q: string;
   tagId: string;
   status: string;
   unplayedOnly: boolean;
+  /** "I have twenty minutes" — the most common real query. */
+  length: LengthBand;
+  sort: FeedSort;
 }
 
-export const EMPTY_FILTERS: FeedFilterState = { q: "", tagId: "", status: "", unplayedOnly: false };
+export const EMPTY_FILTERS: FeedFilterState = {
+  q: "", tagId: "", status: "", unplayedOnly: false, length: "", sort: "newest",
+};
 
 export const hasActiveFilters = (f: FeedFilterState) =>
-  Boolean(f.q.trim() || f.tagId || f.status || f.unplayedOnly);
+  Boolean(f.q.trim() || f.tagId || f.status || f.unplayedOnly || f.length || f.sort !== "newest");
 
-/** Server-side statuses. `unplayedOnly` is separate — played state lives in
- *  localStorage, so it can only be applied on the client. */
+/** Minutes each band maps to, sent to the server as bounds. */
+export const LENGTH_BOUNDS: Record<Exclude<LengthBand, "">, { min?: number; max?: number }> = {
+  short:  { max: 20 },
+  medium: { min: 20, max: 60 },
+  long:   { min: 60 },
+};
+
+const LENGTHS: { key: Exclude<LengthBand, "">; label: string }[] = [
+  { key: "short",  label: "< 20 min" },
+  { key: "medium", label: "20–60 min" },
+  { key: "long",   label: "> 1 h" },
+];
+
+/** Every one of these is resolved server-side, including `unplayed`. */
 const STATUSES = [
   { key: "transcribed", label: "Transcribed" },
   { key: "distilled",   label: "Distilled" },
+  { key: "bookmarked",  label: "Bookmarked" },
   { key: "adfree",      label: "Ad-free" },
   { key: "downloaded",  label: "Downloaded" },
+];
+
+const SORTS: { key: FeedSort; label: string }[] = [
+  { key: "newest",   label: "Newest" },
+  { key: "oldest",   label: "Oldest" },
+  { key: "shortest", label: "Shortest" },
+  { key: "longest",  label: "Longest" },
 ];
 
 export function Chip({ active, onClick, children }: {
@@ -51,6 +78,7 @@ export default function FeedFilterBar({
 }) {
   // Local mirror so typing stays responsive; the parent is told on a debounce.
   const [draftQ, setDraftQ] = useState(filters.q);
+  const [more, setMore] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Keep in step when the parent clears filters from elsewhere.
@@ -92,27 +120,55 @@ export default function FeedFilterBar({
         )}
       </div>
 
-      {/* Chips — one scroll row keeps the feed above the fold on a phone. */}
+      {/* First row: what you reach for most — how much time you have, and
+          whether you have heard it. One scroll row keeps the feed above the
+          fold on a phone; everything rarer is behind "More". */}
       <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-4 px-4 scrollbar-none">
         <Chip active={filters.unplayedOnly} onClick={() => set({ unplayedOnly: !filters.unplayedOnly })}>
           Unplayed
         </Chip>
-        {/* Your own tags come before the built-in statuses: this row scrolls on
-            a phone, and the tags you created are the reason you opened it. */}
+        {LENGTHS.map(l => (
+          <Chip
+            key={l.key}
+            active={filters.length === l.key}
+            onClick={() => set({ length: filters.length === l.key ? "" : l.key })}
+          >
+            {l.label}
+          </Chip>
+        ))}
         {tags.map(t => (
           <Chip key={t.id} active={filters.tagId === t.id}
             onClick={() => set({ tagId: filters.tagId === t.id ? "" : t.id })}>
             #{t.name}
           </Chip>
         ))}
-        {tags.length > 0 && <div className="flex-shrink-0 w-px bg-gray-700 my-1.5 mx-1" />}
-        {STATUSES.map(s => (
-          <Chip key={s.key} active={filters.status === s.key}
-            onClick={() => set({ status: filters.status === s.key ? "" : s.key })}>
-            {s.label}
-          </Chip>
-        ))}
+        <Chip active={more} onClick={() => setMore(m => !m)}>
+          {more ? "Less ▲" : "More ▾"}
+        </Chip>
       </div>
+
+      {more && (
+        <div className="space-y-2 pt-0.5">
+          <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-4 px-4 scrollbar-none">
+            {STATUSES.map(s => (
+              <Chip key={s.key} active={filters.status === s.key}
+                onClick={() => set({ status: filters.status === s.key ? "" : s.key })}>
+                {s.label}
+              </Chip>
+            ))}
+          </div>
+          <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-4 px-4 scrollbar-none items-center">
+            <span className="text-[11px] text-gray-500 uppercase tracking-wider font-semibold flex-shrink-0 pr-1">
+              Order
+            </span>
+            {SORTS.map(s => (
+              <Chip key={s.key} active={filters.sort === s.key} onClick={() => set({ sort: s.key })}>
+                {s.label}
+              </Chip>
+            ))}
+          </div>
+        </div>
+      )}
 
       {active && (
         <div className="flex items-center justify-between text-xs text-gray-500">

@@ -42,11 +42,22 @@ async def play(req: PlayRequest):
     Trigger download + transcription for an episode.
     Returns immediately; transcription runs in background.
     Audio is streamed from /player/audio/{episode_id} once downloaded.
+
+    Also returns the podcast's playback preferences, because the player needs
+    them at exactly this moment — the speed to use, how much intro to skip,
+    whether to open the ad-free cut — and asking for them separately would
+    either race the first frames of audio or cost a second round trip on every
+    play.
     """
     db = await get_db()
     try:
         row = await db.execute_fetchone(
-            "SELECT downloaded, local_path, transcript_status FROM episodes WHERE id = ?",
+            """SELECT e.downloaded, e.local_path, e.transcript_status, e.podcast_id,
+                      s.playback_rate, s.skip_intro, s.skip_outro,
+                      s.prefer_adfree, s.auto_transcribe
+                 FROM episodes e
+                 LEFT JOIN subscriptions s ON s.podcast_id = e.podcast_id
+                WHERE e.id = ?""",
             (req.episode_id,),
         )
     finally:
@@ -58,9 +69,18 @@ async def play(req: PlayRequest):
     local_path = Path(row["local_path"]) if row["local_path"] else None
     ready = bool(row["downloaded"]) and local_path is not None and local_path.exists()
 
+    # A show can opt out of transcription entirely. That is a load control, not
+    # a preference: transcription is the one stage that can cost money or pin a
+    # core for minutes, and some subscriptions are music or background noise
+    # nobody will ever search.
+    transcribe = row["auto_transcribe"] is None or bool(row["auto_transcribe"])
+
     if not ready:
-        _start_download(req.episode_id, req.audio_url, row["transcript_status"])
-    elif row["transcript_status"] not in ("done", "processing"):
+        _start_download(
+            req.episode_id, req.audio_url,
+            row["transcript_status"] if transcribe else "done",
+        )
+    elif transcribe and row["transcript_status"] not in ("done", "processing"):
         _start_transcription(req.episode_id, local_path)
 
     return {
@@ -70,6 +90,13 @@ async def play(req: PlayRequest):
         # "downloading" means poll /player/download-status; "ready" means the
         # audio can be requested now.
         "status": "ready" if ready else "downloading",
+        "settings": {
+            "playback_rate": row["playback_rate"],
+            "skip_intro": row["skip_intro"],
+            "skip_outro": row["skip_outro"],
+            "prefer_adfree": None if row["prefer_adfree"] is None else bool(row["prefer_adfree"]),
+            "auto_transcribe": None if row["auto_transcribe"] is None else bool(row["auto_transcribe"]),
+        },
     }
 
 
@@ -441,7 +468,7 @@ async def export_note(episode_id: str, enrich: bool = True):
     """The episode as one Markdown note, for pasting into a vault.
 
     `enrich=false` returns immediately from what is already stored — summary,
-    chapters, highlights. With enrichment it adds key points, what the episode
+    chapters, distills, bookmarks. With enrichment it adds key points, what the episode
     mentioned, and a diagram of its argument, which costs one model call the
     first time and is cached after.
     """
@@ -464,6 +491,14 @@ async def export_note(episode_id: str, enrich: bool = True):
         )]
         gists = [dict(r) for r in await db.execute_fetchall(
             "SELECT start_seconds, text, summary, auto FROM gists WHERE episode_id = ? "
+            "ORDER BY start_seconds",
+            (episode_id,),
+        )]
+        # Bookmarks are the cheap half of the same gesture, and a note that
+        # left them out would be missing whatever the listener actually
+        # reached for while their hands were busy.
+        bookmarks = [dict(r) for r in await db.execute_fetchall(
+            "SELECT start_seconds, text, note FROM bookmarks WHERE episode_id = ? "
             "ORDER BY start_seconds",
             (episode_id,),
         )]
@@ -500,7 +535,7 @@ async def export_note(episode_id: str, enrich: bool = True):
         await db.close()
 
     from services.note_builder import build_markdown
-    markdown = build_markdown(episode, chapters, gists, extras)
+    markdown = build_markdown(episode, chapters, gists, extras, bookmarks)
     return {
         "episode_id": episode_id,
         "title": episode["title"],

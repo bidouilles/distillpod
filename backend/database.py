@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS episodes (
     downloaded        INTEGER DEFAULT 0,
     local_path        TEXT,
     transcript_status TEXT DEFAULT 'none',
+    -- When this row appeared, which is not when the episode was published: a
+    -- channel import backfills years of uploads at once. The inbox counts what
+    -- arrived, so it has to ask the first question, not the second.
+    created_at        TEXT,
     FOREIGN KEY (podcast_id) REFERENCES subscriptions(podcast_id)
 );
 
@@ -139,6 +143,66 @@ CREATE TABLE IF NOT EXISTS podcast_tags (
 );
 CREATE INDEX IF NOT EXISTS idx_podcast_tags_tag ON podcast_tags(tag_id);
 
+-- Up Next, server-side. The client keeps a localStorage mirror so the queue
+-- renders instantly and works offline, but this is the copy the devices agree
+-- on — the same contract `playback` already has for positions. Without it a
+-- queue built on the sofa did not exist on the phone in the car.
+CREATE TABLE IF NOT EXISTS queue (
+    episode_id TEXT PRIMARY KEY,
+    position   INTEGER NOT NULL,
+    added_at   TEXT NOT NULL,
+    FOREIGN KEY (episode_id) REFERENCES episodes(id)
+);
+CREATE INDEX IF NOT EXISTS idx_queue_position ON queue(position);
+
+-- A quote kept from the transcript. Deliberately not a distillation: a distill
+-- costs a CLI round trip and ~30s, so it is a poor fit for the six things you
+-- want to keep while driving. A bookmark costs an INSERT.
+CREATE TABLE IF NOT EXISTS bookmarks (
+    id            TEXT PRIMARY KEY,
+    episode_id    TEXT NOT NULL,
+    start_seconds REAL NOT NULL,
+    end_seconds   REAL NOT NULL,
+    text          TEXT NOT NULL,
+    note          TEXT,
+    created_at    TEXT NOT NULL,
+    FOREIGN KEY (episode_id) REFERENCES episodes(id)
+);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_episode ON bookmarks(episode_id, start_seconds);
+
+-- Playlists come in two kinds sharing one table, because to everything that
+-- reads them — the list, the detail page, "play all" — they are the same thing:
+-- an ordered set of episodes. A manual one stores its members in
+-- playlist_items; a smart one stores a rule in rules_json and is resolved by a
+-- query at read time, so it can never go stale.
+CREATE TABLE IF NOT EXISTS playlists (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    kind       TEXT NOT NULL DEFAULT 'manual',   -- manual | smart
+    rules_json TEXT,                             -- smart only
+    position   INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS playlist_items (
+    playlist_id TEXT NOT NULL,
+    episode_id  TEXT NOT NULL,
+    position    INTEGER NOT NULL,
+    added_at    TEXT NOT NULL,
+    PRIMARY KEY (playlist_id, episode_id),
+    FOREIGN KEY (playlist_id) REFERENCES playlists(id)
+);
+CREATE INDEX IF NOT EXISTS idx_playlist_items ON playlist_items(playlist_id, position);
+
+-- App-wide state with no natural home of its own: when the inbox was last
+-- cleared, how long audio is kept. One row per key rather than a settings
+-- table per feature.
+CREATE TABLE IF NOT EXISTS app_state (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 -- Full-text index over transcript text, for searching what was actually said.
 -- `remove_diacritics 2` folds accents, so "retro" finds "rétro-ingénierie" —
 -- essential when half the library is French and nobody types accents into a
@@ -183,11 +247,44 @@ async def init_db():
             'ALTER TABLE episodes ADD COLUMN chapters_status TEXT DEFAULT \'none\'',
             'ALTER TABLE gists ADD COLUMN auto INTEGER DEFAULT 0',
             'ALTER TABLE subscriptions ADD COLUMN source TEXT',
+            'ALTER TABLE episodes ADD COLUMN created_at TEXT',
+            # Per-podcast playback preferences. NULL means "no opinion", which
+            # is not the same as a stored default: it lets the player keep
+            # using whatever the global control is set to.
+            'ALTER TABLE subscriptions ADD COLUMN playback_rate REAL',
+            'ALTER TABLE subscriptions ADD COLUMN skip_intro INTEGER',
+            'ALTER TABLE subscriptions ADD COLUMN skip_outro INTEGER',
+            'ALTER TABLE subscriptions ADD COLUMN prefer_adfree INTEGER',
+            'ALTER TABLE subscriptions ADD COLUMN auto_transcribe INTEGER',
         ]:
             try:
                 await db.execute(alter)
             except Exception:
                 pass
+        await db.commit()
+
+        # Stamp `created_at` from one place rather than at six insert sites.
+        # SQLite will not accept a non-constant column default in ALTER TABLE,
+        # and every ingest path — RSS, YouTube channel sync, the nightly job —
+        # has to be stamped or the inbox undercounts. A trigger is the one
+        # mechanism that covers paths not written yet, including in scripts/.
+        try:
+            await db.execute(
+                """CREATE TRIGGER IF NOT EXISTS episodes_stamp_created_at
+                   AFTER INSERT ON episodes WHEN NEW.created_at IS NULL
+                   BEGIN
+                     UPDATE episodes
+                        SET created_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                      WHERE id = NEW.id;
+                   END"""
+            )
+        except Exception:
+            pass
+        # An existing library must not read as one enormous unread inbox, so
+        # rows that predate the column are dated by when they were published.
+        await db.execute(
+            "UPDATE episodes SET created_at = published_at WHERE created_at IS NULL"
+        )
         await db.commit()
 
         await _backfill_subscription_source(db)
@@ -257,6 +354,7 @@ async def _backfill_transcript_index(db) -> None:
 # something a future change should have to remember.
 _EPISODE_CHILD_TABLES = (
     "transcripts", "gists", "episode_chats", "researches", "chapters", "transcripts_fts",
+    "playback", "episode_notes", "bookmarks", "queue", "playlist_items",
 )
 
 
@@ -291,8 +389,19 @@ async def _migrate_unsafe_episode_ids(db) -> None:
             continue
         await db.execute("UPDATE episodes SET id = ? WHERE id = ?", (new_id, old_id))
         for table in _EPISODE_CHILD_TABLES:
-            await db.execute(
-                f"UPDATE {table} SET episode_id = ? WHERE episode_id = ?", (new_id, old_id)
-            )
+            try:
+                await db.execute(
+                    f"UPDATE {table} SET episode_id = ? WHERE episode_id = ?", (new_id, old_id)
+                )
+            except Exception as exc:
+                # Several of these keep episode_id as a primary key, so an
+                # orphan row already holding the new id makes this a constraint
+                # violation. That must not abort init_db — the app would refuse
+                # to start over one stale queue entry. Losing that row is the
+                # right trade.
+                log.warning(
+                    "could not move %s rows for episode %s -> %s: %s",
+                    table, old_id, new_id, exc,
+                )
     await db.commit()
     log.info("migrated %d episode id(s) to a URL-safe form", len(remap))

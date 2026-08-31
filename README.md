@@ -134,12 +134,21 @@ subscription either way.
 - **▶️ Fullscreen Player** — Spotify-style slide-up player with chapter navigation, ad-free toggle, and distillation controls.
 - **⚙️ Auto-snips** — the nightly job picks the handful of moments per new episode that would have been worth tapping, and saves them as distills, badged so you know they were suggested rather than chosen. Also available on demand from any transcribed episode via **⚙ Suggest highlights**, which is the only route for YouTube videos and anything older than the job's window. Measured at ~13s for a 12-minute episode.
 - **⚗️ Distill** — tap at any moment while listening. Captures the last 60 seconds of transcript, calls the agent CLI, and returns a verbatim quote and a 1–2 sentence insight (~30s).
+- **🔖 Bookmarks** — the cheap half of the same gesture, and the one you can use six times on a drive. Tap 🔖 in the player and the sentence being spoken is kept verbatim, with its timestamp; no model call, no waiting. Or press and hold any line of the read-along transcript. Bookmarks carry an optional note, show up in the episode's Obsidian export, and are filterable in the feed.
 - **✂️ Ad-free audio** — after transcription, the model classifies ad segments and ffmpeg cuts them out. Stream the clean version from the player.
 - **📖 Chapters** — the model generates 4–10 named chapters with timestamps from the full transcript. Tap any chapter to jump directly.
 - **💬 Episode chat** — ask questions about any transcribed episode. The model answers using the full transcript as context. History kept per episode (capped at 50 messages). Copy the whole conversation as Markdown or download it as a `.md` file from the chat header.
 - **📺 YouTube videos** — paste a link under Search → **YouTube** and the video joins your library as an ordinary episode: audio you can listen to, a word-level transcript, and every AI feature on top of it. Grouped under its channel, so videos filter and search like any show. See [YouTube videos](#youtube-videos).
 - **🔬 Research** — trigger a deep research report from any distillation. The model generates queries, Tavily runs web searches, then synthesizes findings into an HTML report. Delivered via Telegram.
-- **📋 Distillations library** — all your distillations grouped by episode. Copy, delete, or trigger research from any entry.
+- **📋 Saved** — distillations and bookmarks side by side, each grouped and copyable. Distills keep their Copy / Delete / Research controls; bookmarks jump back to the moment they were kept.
+- **↕️ Up Next** — a server-side queue, so a queue built on the laptop is the queue the phone plays. Reachable from the header on every screen, with a count. Add from the feed while skimming, from an episode page, or by sending a whole playlist to it.
+- **🗂 Playlists, manual and smart** — keep a list by hand, or set a rule and let it fill itself: *unplayed, under 25 minutes, #tech*. A smart playlist is resolved when it is read, so its count is true now rather than when it was made — and it uses the same query builder as the feed's filter chips, so a rule means exactly what the chips mean.
+- **📥 Inbox** — how many episodes have arrived since you last looked, cleared in one tap. Counted from when the row arrived here rather than its publish date, so a channel import of 300 old uploads is not news.
+- **⏱ Sleep timer** — 15/30/45/60 minutes or "end of episode", fading out over the last few seconds. Wall-clock, not playback time: pausing to say something should not extend the night. Auto-advance is suppressed, so it stops rather than starting the next thing.
+- **🎚 Per-podcast playback** — speed, skip-intro, skip-outro, ad-free by default, and *never transcribe this show*. Each is optional; unset means "no opinion", so the player keeps whatever you last chose. The transcription switch is a load control, not a preference — it is the one stage that can cost money or pin a core for minutes.
+- **💽 Storage & retention** — what the audio is costing, broken down by show, plus a retention policy the nightly job applies. Off by default. Clearing an episode removes only its audio: the transcript, chapters, distills and bookmarks stay, and it downloads again on play. Nothing queued or part-heard is ever cleared, and stray files no episode claims are swept up.
+- **📄 OPML** — import a library from another app, export yours as a backup. The only thing that makes a rebuild of the box survivable without re-searching forty shows by hand.
+- **⏳ Filter by how much time you have** — `< 20 min`, `20–60 min`, `> 1 h`, plus sort by newest, oldest, shortest or longest. All resolved server-side, including *unplayed*, which used to be applied from this browser's localStorage and so quietly lied about episodes finished on another device.
 - **⚡ Stale-while-revalidate caching** — data is cached in localStorage with a 30-minute TTL and refreshed silently in the background.
 
 ---
@@ -205,6 +214,12 @@ claude login
 | Episode chat | User opens chat or sends message |
 | Deep research report | User triggers from a distillation |
 | Podcast suggestions | Daily cron at 09:00 BRT |
+
+Everything else — bookmarks, the queue, playlists, the inbox count, retention,
+OPML, transcript search — is plain SQL over data already on disk. Worth stating,
+because the split is deliberate: the model is asked only for things it is the
+only way to get, and the features you use most often are the ones that cost
+nothing and return instantly.
 
 ### Transcription
 
@@ -393,6 +408,10 @@ Re-adding a video you already have is a no-op that returns the existing episode.
 | `backend/routers/podcasts.py` | Search, subscribe, episode listing, suggestions |
 | `backend/routers/player.py` | Play trigger, audio streaming, transcript status, chapters |
 | `backend/routers/gists.py` | Create, list, delete distillations |
+| `backend/routers/bookmarks.py` | Keep, annotate, list, delete transcript quotes |
+| `backend/routers/queue.py` | Up Next — read, enqueue, reorder, clear |
+| `backend/routers/playlists.py` | Playlists (manual + smart), membership, "play all" |
+| `backend/routers/storage.py` | Disk usage, retention policy, prune |
 | `backend/routers/chat.py` | Episode Q&A — init, message, history |
 | `backend/routers/research.py` | Trigger + poll research reports |
 | `backend/services/downloader.py` | Async MP3 download to `/media/` |
@@ -400,6 +419,10 @@ Re-adding a video you already have is a no-op that returns the existing episode.
 | `backend/services/transcriber.py` | Transcription orchestration, DB writes, async background task |
 | `backend/services/llm.py` | Agent CLI adapter — the only place a model is invoked |
 | `backend/services/snip_engine.py` | Timestamp window lookup + distillation |
+| `backend/services/bookmark_engine.py` | Sentence extraction around a timestamp — no model call |
+| `backend/services/episode_query.py` | The one place episode filters become SQL — feed and smart playlists both |
+| `backend/services/retention.py` | What media costs, and what may be deleted |
+| `backend/services/opml.py` | OPML import/export |
 | `backend/services/ad_detector.py` | Ad classification + ffmpeg audio surgery |
 | `backend/services/chapterizer.py` | Chapter + summary generation |
 | `backend/services/researcher.py` | Multi-turn research pipeline: model + Tavily → HTML report |
@@ -528,6 +551,7 @@ The daily sync pipeline per subscription:
 5. Detect + remove ads (non-fatal)
 6. Generate chapters + episode summary
 7. Telegram alert on errors
+8. Apply the media retention policy (a no-op unless one has been set)
 
 ---
 
@@ -551,7 +575,16 @@ npx playwright test
 
 Mobile viewport (390x844), Chromium. Requires `TEST_MODE=true` in `.env` for auth bypass.
 
-Test files: navigation, home feed, search, library, player (fullscreen, gists, chapters, ad-free, chat), gists library, caching, SPA routing.
+Test files: navigation, home feed, search, library, player (fullscreen, gists, chapters, ad-free, chat), saved (distills), caching, SPA routing.
+
+> [!NOTE]
+> **SPA paths and API prefixes share one namespace.** The frontend is served by
+> the same app through a catch-all that runs last, so a router registering a
+> path the SPA also uses makes that screen return JSON on reload — and only on
+> a reload, which is the case nobody clicks through while developing. This bit
+> once: `/queue` and `/playlists/:id` became API routes, so the SPA now uses
+> `/up-next` and `/library/playlists/:id`. `tests/test_spa_routes.py` asserts
+> every SPA path is still unclaimed; add to `SPA_PATHS` when you add a screen.
 
 ---
 
