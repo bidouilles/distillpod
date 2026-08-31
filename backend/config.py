@@ -7,12 +7,20 @@ class Settings(BaseSettings):
     podcast_index_api_key: str = ""
     podcast_index_secret: str = ""
 
-    # Claude CLI — resolved via PATH by default
-    claude_bin: str = ""
+    # Agent CLI backing every AI feature. "codex" (default) or "claude".
+    llm_backend: str = "codex"
+    llm_bin: str = ""      # explicit path; resolved via PATH when empty
+    llm_model: str = ""    # passed to `codex exec -m`; empty means the CLI default
+
+    @property
+    def llm(self) -> str:
+        name = "claude" if self.llm_backend == "claude" else "codex"
+        return self.llm_bin or shutil.which(name) or name
 
     @property
     def claude(self) -> str:
-        return self.claude_bin or shutil.which("claude") or "claude"
+        """Deprecated alias kept so any straggling caller keeps working."""
+        return self.llm
 
     # Storage
     media_dir: Path = Path("media")

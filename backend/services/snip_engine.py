@@ -1,46 +1,41 @@
 """
 Gist engine — extracts text from pre-computed transcript by timestamp range.
-Zero latency, zero cost. Optionally generates a Claude summary via CLI subprocess.
+Zero latency, zero cost. Optionally generates a summary via the agent CLI.
 """
-import asyncio
-import subprocess
+import json
 import uuid
 from datetime import datetime, timezone
 
 from config import settings
 from models import Gist
+from services import llm
 from services.transcriber import get_transcript_words
 
+GIST_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "quote": {"type": "string"},
+        "insight": {"type": "string"},
+    },
+    "required": ["quote", "insight"],
+    "additionalProperties": False,
+}
 
-def _claude_summarize_sync(text: str) -> str | None:
-    """
-    Blocking subprocess call to `claude --print`. Runs in a thread pool
-    so it doesn't block the async event loop.
-    Uses the Claude Max subscription already authenticated on this VPS.
+
+async def _summarize(text: str) -> str | None:
+    """Ask the agent for a verbatim quote plus a short insight.
+
+    Returns the JSON string stored on the gist, or None if the call failed —
+    a missing summary degrades the gist, it doesn't invalidate it.
     """
     prompt = (
         "From this podcast transcript excerpt, extract two things:\n"
         "1. The single most memorable/quotable sentence — pick verbatim from the text\n"
         "2. A 1-2 sentence insight capturing the core idea\n\n"
-        "Respond with ONLY valid JSON, no markdown, no extra text:\n"
-        "{\"quote\": \"...\", \"insight\": \"...\"}\n\n"
         f"Transcript:\n{text}"
     )
-    result = subprocess.run(
-        [settings.claude, "--print", prompt],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    if result.returncode != 0:
-        return None
-    out = result.stdout.strip()
-    # Strip markdown code fences if Claude ignores the "no markdown" instruction
-    if out.startswith("```"):
-        out = out.split("\n", 1)[-1]  # drop first line (```json)
-        if out.endswith("```"):
-            out = out.rsplit("```", 1)[0]
-    return out.strip() or None
+    data = await llm.arun_json(prompt, schema=GIST_SCHEMA, timeout=60, default=None)
+    return json.dumps(data) if data else None
 
 
 async def create_gist(
@@ -53,7 +48,7 @@ async def create_gist(
 ) -> Gist:
     """
     Extract the last N seconds of transcript up to current_seconds.
-    Optionally generates a Claude summary (via CLI subprocess, free with Max subscription).
+    Optionally generates a summary via the agent CLI.
     """
     context = settings.gist_context_seconds
     start = max(0.0, current_seconds - context)
@@ -70,10 +65,7 @@ async def create_gist(
     if not text:
         raise ValueError("No transcribed content in the selected time range")
 
-    # Optional: Claude summary via subprocess (non-blocking, runs in thread pool)
-    summary = None
-    if with_summary:
-        summary = await asyncio.to_thread(_claude_summarize_sync, text)
+    summary = await _summarize(text) if with_summary else None
 
     gist = Gist(
         id=str(uuid.uuid4()),

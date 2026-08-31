@@ -30,8 +30,8 @@ DistillPod is a self-hosted podcast client with AI-powered features: on-device t
               ┌───────────────────────┼──────────────────────┐
               │                       │                       │
    ┌──────────▼──────┐   ┌───────────▼──────┐   ┌──────────▼──────┐
-   │   SQLite DB      │   │   Media files     │   │  Claude CLI     │
-   │ distillpod.db    │   │  /media/*.mp3     │   │ claude --print  │
+   │   SQLite DB      │   │   Media files     │   │   Agent CLI     │
+   │ distillpod.db    │   │  /media/*.mp3     │   │   codex exec    │
    └─────────────────┘   └──────────────────┘   └────────────────┘
 ```
 
@@ -154,7 +154,7 @@ POST   /chat/{episode_id}/init    → first-time AI summary + invitation to ask 
 POST   /chat/{episode_id}/message → send a user message, get AI reply
 ```
 
-Each message calls Claude via `claude --print` subprocess. History is kept in the `episode_chats` table (last 10 turns passed as context). Full transcript is included in every prompt — high token cost but ensures accurate answers.
+Each message calls the agent CLI via `llm.arun`. History is kept in the `episode_chats` table (last 10 turns passed as context). Full transcript is included in every prompt — high token cost but ensures accurate answers.
 
 ---
 
@@ -165,7 +165,7 @@ POST /research/{gist_id}  → trigger background research job
 GET  /research/{gist_id}  → poll status + get report URL
 ```
 
-Research runs as a multi-turn Claude pipeline (see §5). Generates an HTML report saved to `/path/to/distillpod/reports/{id}.html`, served at `/reports/{filename}`.
+Research runs as a multi-turn agent pipeline (see §5). Generates an HTML report saved to `/path/to/distillpod/reports/{id}.html`, served at `/reports/{filename}`.
 
 ---
 
@@ -220,7 +220,7 @@ Research runs as a multi-turn Claude pipeline (see §5). Generates an HTML repor
 | `start_seconds` | REAL | Window start (current_pos − 60s) |
 | `end_seconds` | REAL | Window end (current_pos) |
 | `text` | TEXT | Verbatim transcript text |
-| `summary` | TEXT | JSON `{quote, insight}` from Claude |
+| `summary` | TEXT | JSON `{quote, insight}` from the model |
 | `created_at` | TEXT | |
 
 ### `episode_chats`
@@ -246,7 +246,7 @@ Research runs as a multi-turn Claude pipeline (see §5). Generates an HTML repor
 | `id` | TEXT PK | UUID |
 | `podcast_index_id` | TEXT | PodcastIndex ID if found |
 | `title`, `author`, `description`, `image_url`, `feed_url` | TEXT | Metadata |
-| `reason` | TEXT | Why Claude suggested it |
+| `reason` | TEXT | Why the model suggested it |
 | `suggested_at` | TEXT | |
 | `dismissed` | INTEGER | 0/1 |
 
@@ -298,16 +298,16 @@ POST /player/play
 1. Reads word-level transcript from DB
 2. Filters words in window `[current_pos − 60s, current_pos]`
 3. Joins words into plain text
-4. Calls Claude subprocess: `claude --print` with prompt requesting `{quote, insight}` JSON
+4. Calls `llm.arun_json` with `GIST_SCHEMA`, yielding `{quote, insight}`
 5. Returns `Gist` object
 
-**Claude prompt structure:** Extract the most quotable sentence + 1–2 sentence insight. Responds with raw JSON.
+**Prompt structure:** Extract the most quotable sentence + 1–2 sentence insight. The schema guarantees raw JSON.
 
 ### 5.4 Ad Detector (`services/ad_detector.py`)
 
 **Step 1 — Segmentation:** Groups transcript words into ~30s chunks with `[MM:SS–MM:SS]` timestamps.
 
-**Step 2 — Claude classification:** Sends full segmented transcript to Claude asking for ad segments. Returns `[{start, end, reason}]` or `[]`.
+**Step 2 — classification:** Sends the full segmented transcript to the model asking for ad segments. Returns `[{start, end, reason}]` or `[]`.
 
 **Step 3 — Validation:** Filters segments < 5s, clamps to episode duration.
 
@@ -323,7 +323,7 @@ POST /player/play
 
 1. Groups words into ~120s dense segments (vs 30s for ad detector)
 2. Truncates to 12,000 chars max, sampled evenly across the episode
-3. Claude prompt asks for 4–10 chapters with start times + 2–3 sentence summary
+3. Prompt asks for 4–10 chapters with start times + 2–3 sentence summary
 4. Validates: first chapter forced to `start_time=0.0`, sorted, deduped
 5. Returns `{summary: str, chapters: [{title, start_time}]}`
 
@@ -334,14 +334,14 @@ POST /player/play
 Multi-turn research pipeline triggered from a gist. Runs synchronously in a thread pool.
 
 **Pipeline:**
-1. **Topic extraction** — Claude extracts 3–5 search queries from the gist text + summary
+1. **Topic extraction** — the model extracts 3–5 search queries from the gist text + summary
 2. **Tavily search** — 3 searches via Tavily API, collects URLs + snippets
-3. **Synthesis** — Claude synthesizes findings into structured research (definitions, context, implications, further reading)
+3. **Synthesis** — the model synthesizes findings into structured research (definitions, context, implications, further reading)
 4. **HTML report generation** — Markdown → HTML with inline CSS, saved to `/path/to/distillpod/reports/{id}.html`
 5. **Telegram notify** — sends report URL to `TG_CHAT_ID` if configured
 6. **DB update** — sets `status=done`, `public_url`, `finished_at`
 
-Uses `Tavily API` key + `claude --print` for all AI steps.
+Uses a `Tavily API` key + `services/llm.py` for all AI steps.
 
 ### 5.7 Podcast Index (`services/podcast_index.py`)
 
@@ -453,8 +453,8 @@ Full pipeline per subscription:
 3. **New episode insert** — `INSERT OR IGNORE` into `episodes`
 4. **Download** — streaming HTTP download for recent episodes (≤48h old)
 5. **Transcription** — faster-whisper in thread pool, word-level timestamps saved
-6. **Ad detection** — Claude classifies transcript → ffmpeg cuts ad-free version
-7. **Chapterization** — Claude generates chapters + episode summary
+6. **Ad detection** — the model classifies transcript → ffmpeg cuts ad-free version
+7. **Chapterization** — the model generates chapters + episode summary
 8. **Error report** — Telegram alert if any episodes ended in `error` state
 9. **`last_checked` update** on subscription
 
@@ -466,32 +466,56 @@ Full pipeline per subscription:
 **Timeout:** 180s
 
 1. Reads all subscriptions + recent episode titles from DB
-2. Calls Claude Haiku (`claude-haiku-4-5`) to generate 4 search queries based on listening habits
+2. Calls the agent CLI to generate 4 search queries based on listening habits
 3. Searches iTunes API for each query
 4. Filters out already-subscribed + already-suggested podcasts
-5. Claude ranks and selects top 4
+5. The model ranks and selects top 4
 6. Inserts into `suggestions` table
 7. Announces results via cron deliver (Tia do Zap)
 
-**Model:** Uses Anthropic Python SDK (`anthropic.Anthropic`) directly (not Claude CLI subprocess). Key hardcoded in script — should be moved to env.
+**Model:** Goes through `services/llm.py` like every other AI feature — no SDK, no API key.
 
 ---
 
 ## 9. AI Usage Summary
 
-| Feature | Method | Model | Trigger |
+Every model call goes through one adapter, `backend/services/llm.py`. Nothing else in
+the codebase spawns an agent process.
+
+| Feature | Adapter call | Reply shape | Trigger |
 |---|---|---|---|
-| Gist summary | `claude --print` subprocess | Claude (default, CLI) | User taps "Distill this moment" |
-| Episode chat | `claude --print` subprocess | Claude (default, CLI) | User opens chat or sends message |
-| Ad detection | `claude --print` subprocess | Claude (default, CLI) | After transcription completes |
-| Chapterization | `claude --print` subprocess | Claude (default, CLI) | Daily sync or on-demand |
-| Research report | `claude --print` subprocess | Claude (default, CLI) | User triggers from gist |
-| Podcast suggestions | Anthropic Python SDK | `claude-haiku-4-5` | Daily cron 09:00 BRT |
+| Gist summary | `llm.arun_json` | `GIST_SCHEMA` | User taps "Distill this moment" |
+| Episode chat | `llm.arun` | free text | User opens chat or sends message |
+| Ad detection | `llm.run_json` | `ADS_SCHEMA` | After transcription completes |
+| Chapterization | `llm.run_json` | `CHAPTERS_SCHEMA` | Daily sync or on-demand |
+| Research report | `llm.run_json` + `llm.run` | `TOPICS_SCHEMA`, then prose | User triggers from gist |
+| Podcast suggestions | `llm.run_json` + `llm.run` | `QUERIES_SCHEMA`, then prose | Daily cron 09:00 BRT |
 
-All Claude CLI calls run in a thread pool (`asyncio.to_thread` or `loop.run_in_executor`) to avoid blocking the async FastAPI event loop.
+**Backend:** `LLM_BACKEND=codex` (default) or `claude`. Selected once in `config.py`;
+callers never know which is in use.
 
-Claude is authenticated via `claude login` on the VPS (Max subscription — no per-call cost).  
-Anthropic SDK calls (suggest-podcasts) use a hardcoded API key and consume paid tokens.
+**Invocation (Codex):** `codex exec --skip-git-repo-check --sandbox read-only --ephemeral
+-C <scratch> -o <file> [--output-schema <file>] <prompt>`.
+
+Two properties of `codex exec` shape the adapter:
+
+- stdout carries a banner, the session id, a reasoning trace and a token count around
+  the answer, so the final message is read from `-o/--output-last-message` rather than
+  parsed out of stdout.
+- `--output-schema` constrains the reply to a JSON Schema, so the callers no longer
+  strip markdown fences or defend against prose wrapped around JSON.
+
+Each call runs in a throwaway working directory under `--sandbox read-only`, so the
+model sees neither the app source nor its `AGENTS.md`, and cannot execute anything.
+
+Calls made from async code use `llm.arun` / `llm.arun_json`, which dispatch to a thread
+pool so the FastAPI event loop is never blocked.
+
+Auth comes from `codex login` (or `claude login`) on the VPS — subscription-based, no
+per-call cost and no API key anywhere in the codebase.
+
+Failure policy: chat surfaces an HTTP 500; ad detection, gist summaries and suggestions
+degrade to a `default` (no ads, no summary) rather than failing the surrounding request.
 
 ---
 
@@ -531,7 +555,7 @@ Calls `POST /auth/test-session` (requires `TEST_MODE=true`) → saves session co
 | Issue | Status |
 |---|---|
 | `TEST_MODE=true` left on in prod `.env` | Harmless but should be removed after E2E tests pass |
-| Anthropic API key hardcoded in `suggest-podcasts.py` | Should move to `.env` |
+| ~~Anthropic API key hardcoded in `suggest-podcasts.py`~~ | Resolved: the script now uses the `services/llm.py` CLI adapter, so there is no key |
 | Chapterizer not run on-demand from UI (only daily sync) | User must wait for next sync or manual script run |
 | No retry logic for failed downloads | Episodes in `error` state require manual intervention |
 | `episode_chats` table has no size limit | Long conversations accumulate indefinitely |
@@ -568,7 +592,7 @@ POST /player/play  (user taps Play)
         │
         └─→ [non-fatal] ad_detector.detect_ads()
               │
-              ├─→ Claude: classify segments as ads
+              ├─→ agent: classify segments as ads
               │
               ├─→ ffmpeg: cut + concat ad-free audio
               │
@@ -577,7 +601,7 @@ POST /player/play  (user taps Play)
 [daily-sync only]
   └─→ chapterizer.chapterize()
         │
-        ├─→ Claude: identify chapters + summary
+        ├─→ agent: identify chapters + summary
         │
         ├─→ INSERT chapters (4–10 rows)
         │
@@ -588,21 +612,21 @@ User taps "Distill this moment"
         │
         ├─→ slice transcript [pos-60s, pos]
         │
-        ├─→ Claude: extract {quote, insight}
+        ├─→ agent: extract {quote, insight}
         │
         └─→ INSERT gists
 
 User opens Chat
   └─→ POST /chat/{id}/init or /message
         │
-        └─→ Claude: answer using full transcript context
+        └─→ agent: answer using full transcript context
 
 User triggers Research
   └─→ POST /research/{gist_id}
         │
-        ├─→ Claude: generate search queries
+        ├─→ agent: generate search queries
         ├─→ Tavily: 3 web searches
-        ├─→ Claude: synthesize findings
+        ├─→ agent: synthesize findings
         ├─→ Generate HTML report
         └─→ Telegram notify with URL
 ```

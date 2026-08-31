@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
 Daily podcast recommendation engine for DistillPod.
-Uses Anthropic API to reason about subscriptions, iTunes API to search,
+Uses the agent CLI to reason about subscriptions, iTunes API to search,
 and stores 4 fresh suggestions in the database.
 """
 
 import json
 import os
 import sqlite3
-import subprocess
 import sys
 import uuid
 import httpx
@@ -16,6 +15,8 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../backend"))
 from config import settings
+from services import llm
+
 DB_PATH = str(settings.db_path)
 ITUNES_URL = "https://itunes.apple.com/search"
 N_SUGGEST  = 4
@@ -43,17 +44,14 @@ def get_subscribed_feed_urls(db):
     return {r["feed_url"] for r in db.execute("SELECT feed_url FROM subscriptions").fetchall()}
 
 
-def claude(prompt: str) -> str:
-    result = subprocess.run(
-        ["claude", "--print"],
-        input=prompt,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"claude CLI error: {result.stderr.strip()}")
-    return result.stdout.strip()
+QUERIES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "queries": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["queries"],
+    "additionalProperties": False,
+}
 
 
 def get_search_queries(subs_context: str) -> list:
@@ -67,18 +65,14 @@ Rules:
 - Prefer niche and technical over mainstream
 - Do not suggest queries that would return the shows they already follow
 - Each query should target a different angle (e.g. AI safety, ML engineering practice, research interviews, one wildcard)
-- Return ONLY a JSON array of {N_SUGGEST} strings, nothing else
+- Return the queries under the "queries" key
 
-Example output: ["AI alignment research podcast", "machine learning systems engineering", "LLM interpretability deep dives", "tech founder AI bets"]"""
+Example queries: ["AI alignment research podcast", "machine learning systems engineering", "LLM interpretability deep dives", "tech founder AI bets"]"""
 
-    out = claude(prompt)
-    if out.startswith("```"):
-        out = "\n".join(out.split("\n")[1:])
-        if out.endswith("```"):
-            out = out.rsplit("```", 1)[0]
-    queries = json.loads(out.strip())
-    if not isinstance(queries, list):
-        raise ValueError(f"Expected list, got: {type(queries)}")
+    data = llm.run_json(prompt, schema=QUERIES_SCHEMA, timeout=60)
+    queries = data.get("queries", [])
+    if not queries:
+        raise ValueError("the agent returned no search queries")
     return [str(q) for q in queries[:N_SUGGEST]]
 
 
@@ -91,7 +85,7 @@ DESCRIPTION: {(podcast.get('description') or '')[:300]}
 
 In one sentence of maximum 12 words, explain why this is relevant to their interests.
 Be specific. Return only the sentence, no punctuation at the end."""
-    return claude(prompt).strip().rstrip(".")
+    return llm.run(prompt, timeout=60).strip().rstrip(".")
 
 
 def search_itunes(query: str, limit: int = 8) -> list:
@@ -136,12 +130,12 @@ def main():
     excluded_feeds = get_subscribed_feed_urls(db) | get_existing_suggestion_feed_urls(db)
 
     print(f"[suggest] Subscriptions: {sub_titles}")
-    print("[suggest] Asking Claude for search queries...")
+    print("[suggest] Asking the agent for search queries...")
 
     try:
         queries = get_search_queries(subs_context)
     except Exception as e:
-        print(f"[suggest] Claude query generation failed: {e}", file=sys.stderr)
+        print(f"[suggest] Query generation failed: {e}", file=sys.stderr)
         sys.exit(1)
 
     print(f"[suggest] Queries: {queries}")
@@ -161,7 +155,7 @@ def main():
             continue
         excluded_feeds.add(pick["feed_url"])
 
-        print(f"[suggest] Pick: {pick['title']} — asking Claude for reason...")
+        print(f"[suggest] Pick: {pick['title']} — asking the agent for reason...")
         try:
             reason = get_reason(sub_titles, pick)
         except Exception as e:

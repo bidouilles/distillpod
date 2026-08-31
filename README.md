@@ -1,6 +1,9 @@
 # DistillPod ⚗️
 
-> A self-hosted, mobile-first podcast app with AI-powered features: transcription, distillations, ad detection, chapter generation, episode chat, and deep research reports. No per-call API costs — all AI runs via the Claude CLI through your existing subscription.
+> A self-hosted, mobile-first podcast app with AI-powered features: transcription, distillations, ad detection, chapter generation, episode chat, and deep research reports. No per-call API costs — all AI runs via a coding-agent CLI through your existing subscription.
+
+> [!NOTE]
+> **This is a fork of [andrepaim/distillpod](https://github.com/andrepaim/distillpod).** Upstream drives its AI features with the Claude CLI; this fork drives them with the **Codex CLI** instead. Both backends are supported — set `LLM_BACKEND=claude` to get the original behaviour. The "Why I Built This" section below is the upstream author's.
 
 ---
 
@@ -23,9 +26,9 @@ I was paying for a premium podcast app specifically for its AI distillation feat
 
 So I cut out the middleman.
 
-DistillPod runs entirely on your own server. The AI features — distillations, ad detection, chapters, chat, research — all go through the Claude CLI using your existing subscription. No separate API key, no extra per-call charges on top of what you already pay, no data leaving your infrastructure to a third-party podcast app, no feature flags behind a paywall.
+DistillPod runs entirely on your own server. The AI features — distillations, ad detection, chapters, chat, research — all go through a coding-agent CLI using your existing subscription. No separate API key, no extra per-call charges on top of what you already pay, no data leaving your infrastructure to a third-party podcast app, no feature flags behind a paywall.
 
-If you have a VPS and a Claude subscription, you already have everything you need to run this.
+If you have a VPS and a Codex (or Claude) subscription, you already have everything you need to run this.
 
 ---
 
@@ -35,11 +38,11 @@ If you have a VPS and a Claude subscription, you already have everything you nee
 - **🔍 Search** — find podcasts via the iTunes Search API (no key needed). When the search box is empty, a **🤖 Suggested for you** section surfaces daily AI-generated recommendations based on your listening history.
 - **📚 Library** — browse your subscribed podcasts and their episode lists with transcript status badges.
 - **▶️ Fullscreen Player** — Spotify-style slide-up player with chapter navigation, ad-free toggle, and distillation controls.
-- **⚗️ Distill** — tap at any moment while listening. Captures the last 60 seconds of transcript, calls the Claude CLI, and returns a verbatim quote and a 1–2 sentence insight (~30s).
-- **✂️ Ad-free audio** — after transcription, Claude classifies ad segments and ffmpeg cuts them out. Stream the clean version from the player.
-- **📖 Chapters** — Claude generates 4–10 named chapters with timestamps from the full transcript. Tap any chapter to jump directly.
-- **💬 Episode chat** — ask questions about any transcribed episode. Claude answers using the full transcript as context. History kept per episode (capped at 50 messages).
-- **🔬 Research** — trigger a deep research report from any distillation. Claude generates queries, Tavily runs web searches, Claude synthesizes findings into an HTML report. Delivered via Telegram.
+- **⚗️ Distill** — tap at any moment while listening. Captures the last 60 seconds of transcript, calls the agent CLI, and returns a verbatim quote and a 1–2 sentence insight (~30s).
+- **✂️ Ad-free audio** — after transcription, the model classifies ad segments and ffmpeg cuts them out. Stream the clean version from the player.
+- **📖 Chapters** — the model generates 4–10 named chapters with timestamps from the full transcript. Tap any chapter to jump directly.
+- **💬 Episode chat** — ask questions about any transcribed episode. The model answers using the full transcript as context. History kept per episode (capped at 50 messages).
+- **🔬 Research** — trigger a deep research report from any distillation. The model generates queries, Tavily runs web searches, then synthesizes findings into an HTML report. Delivered via Telegram.
 - **📋 Distillations library** — all your distillations grouped by episode. Copy, delete, or trigger research from any entry.
 - **⚡ Stale-while-revalidate caching** — data is cached in localStorage with a 30-minute TTL and refreshed silently in the background.
 
@@ -47,18 +50,49 @@ If you have a VPS and a Claude subscription, you already have everything you nee
 
 ## How It Works
 
-All AI features call the Claude CLI as a subprocess:
+All AI features go through a single adapter, `backend/services/llm.py`, which shells
+out to the agent CLI. Nothing else in the codebase invokes a model.
 
 ```python
-result = subprocess.run(
-    ["claude", "--print", prompt],
-    capture_output=True, text=True
-)
+from services import llm
+
+# free text
+answer = llm.run(prompt, timeout=120)
+
+# structured reply, constrained by a JSON Schema — no fence-stripping needed
+data = llm.run_json(prompt, schema=CHAPTERS_SCHEMA, timeout=240)
 ```
 
-The CLI authenticates through your Claude subscription — no API key, no per-call billing.
+Under the hood, on the default Codex backend:
 
-**Setup:** install the Claude CLI and log in once:
+```python
+subprocess.run([
+    "codex", "exec",
+    "--skip-git-repo-check",
+    "--sandbox", "read-only",     # pure text tasks; no tool use
+    "--ephemeral",                # don't accumulate session files
+    "-C", scratch_dir,            # throwaway cwd: the model never sees this repo
+    "-o", out_file,               # the ONLY clean source of the final message
+    "--output-schema", schema_file,
+    prompt,
+])
+```
+
+Two details matter. `codex exec` prints a banner, reasoning trace and token count to
+stdout, so the answer is read from `--output-last-message` rather than parsed out of
+stdout. And `--output-schema` constrains the reply to a JSON Schema, which is why the
+callers no longer strip markdown fences.
+
+The CLI authenticates through your existing subscription — no API key, no per-call billing.
+
+**Setup:** install the Codex CLI and log in once:
+
+```bash
+npm install -g @openai/codex
+codex login
+```
+
+To use Claude instead, set `LLM_BACKEND=claude` and install its CLI:
 
 ```bash
 npm install -g @anthropic-ai/claude-code
@@ -110,7 +144,7 @@ Set via `WHISPER_MODEL` in `.env`.
 | Backend | [FastAPI](https://fastapi.tiangolo.com/) + [uvicorn](https://www.uvicorn.org/) |
 | Database | [aiosqlite](https://aiosqlite.omnilib.dev/) — async SQLite (WAL mode) |
 | Transcription | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — local speech-to-text (CTranslate2, int8) |
-| AI | Claude CLI (`claude --print`) |
+| AI | Codex CLI (`codex exec`), or Claude CLI (`claude --print`) |
 | RSS | [feedparser](https://feedparser.readthedocs.io/) |
 | HTTP client | [httpx](https://www.python-httpx.org/) |
 | Auth | [authlib](https://docs.authlib.org/) — Google OAuth2 |
@@ -138,8 +172,8 @@ Set via `WHISPER_MODEL` in `.env`.
               ┌───────────────────────┼──────────────────────┐
               │                       │                       │
    ┌──────────▼──────┐   ┌───────────▼──────┐   ┌──────────▼──────┐
-   │   SQLite DB      │   │   Media files     │   │  Claude CLI     │
-   │ distillpod.db    │   │  /media/*.mp3     │   │ claude --print  │
+   │   SQLite DB      │   │   Media files     │   │   Agent CLI     │
+   │ distillpod.db    │   │  /media/*.mp3     │   │   codex exec    │
    └─────────────────┘   └──────────────────┘   └────────────────┘
 ```
 
@@ -157,10 +191,11 @@ Set via `WHISPER_MODEL` in `.env`.
 | `backend/routers/research.py` | Trigger + poll research reports |
 | `backend/services/downloader.py` | Async MP3 download to `/media/` |
 | `backend/services/transcriber.py` | faster-whisper, word-level timestamps, async background task |
-| `backend/services/snip_engine.py` | Timestamp window lookup + Claude distillation |
-| `backend/services/ad_detector.py` | Claude ad classification + ffmpeg audio surgery |
-| `backend/services/chapterizer.py` | Claude chapter + summary generation |
-| `backend/services/researcher.py` | Multi-turn research pipeline: Claude + Tavily → HTML report |
+| `backend/services/llm.py` | Agent CLI adapter — the only place a model is invoked |
+| `backend/services/snip_engine.py` | Timestamp window lookup + distillation |
+| `backend/services/ad_detector.py` | Ad classification + ffmpeg audio surgery |
+| `backend/services/chapterizer.py` | Chapter + summary generation |
+| `backend/services/researcher.py` | Multi-turn research pipeline: model + Tavily → HTML report |
 | `backend/services/rss.py` | RSS feed parsing |
 | `backend/services/podcast_index.py` | PodcastIndex API wrapper |
 | `backend/database.py` | SQLite connection, schema init, WAL mode |
@@ -175,7 +210,7 @@ Set via `WHISPER_MODEL` in `.env`.
 - Python 3.10+
 - Node.js 18+
 - ffmpeg (for ad-free audio generation)
-- [Claude CLI](https://claude.ai/code) installed and authenticated
+- [Codex CLI](https://developers.openai.com/codex/cli) installed and authenticated (or the [Claude CLI](https://claude.ai/code) with `LLM_BACKEND=claude`)
 - A VPS with a few GB of RAM (faster-whisper `medium` uses ~1.5GB)
 
 ### Quick start
@@ -270,7 +305,7 @@ Two daily cron jobs run as background scripts:
 | Job | Schedule | Script | What it does |
 |---|---|---|---|
 | `distillpod-daily-sync` | 03:00 BRT | `scripts/daily-sync.py` | RSS fetch → download → transcribe → ad detection → chapterization |
-| `distillpod-suggest` | 09:00 BRT | `scripts/suggest-podcasts.py` | Claude generates queries → iTunes search → 4 suggestions stored |
+| `distillpod-suggest` | 09:00 BRT | `scripts/suggest-podcasts.py` | Model generates queries → iTunes search → 4 suggestions stored |
 
 The daily sync pipeline per subscription:
 1. Reset stuck `processing` episodes

@@ -14,68 +14,46 @@ mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 
 
-# ── claude() ─────────────────────────────────────────────────────────────────
-
-class TestClaude:
-
-    def _run(self, stdout: str):
-        mock = MagicMock()
-        mock.returncode = 0
-        mock.stdout = stdout
-        with patch("subprocess.run", return_value=mock) as p:
-            result = mod.claude("any prompt")
-        return result
-
-    def test_returns_clean_json(self):
-        raw = '["query one", "query two"]'
-        assert self._run(raw) == raw
-
-    def test_preserves_markdown_fences(self):
-        """claude() only strips whitespace; fence stripping is in get_search_queries()"""
-        raw = '```json\n["query one"]\n```'
-        result = self._run(raw)
-        assert result == '```json\n["query one"]\n```'
-
-    def test_preserves_fences_no_lang(self):
-        """claude() only strips whitespace; fence stripping is in get_search_queries()"""
-        raw = '```\n["q1", "q2"]\n```'
-        result = self._run(raw)
-        assert result == '```\n["q1", "q2"]\n```'
-
-    def test_strips_leading_trailing_whitespace(self):
-        raw = '  \n["q1"]\n  '
-        result = self._run(raw)
-        assert result == '["q1"]'
-
-    def test_raises_on_nonzero_exit(self):
-        mock = MagicMock()
-        mock.returncode = 1
-        mock.stderr = "error"
-        with patch("subprocess.run", return_value=mock):
-            import pytest
-            with pytest.raises(RuntimeError):
-                mod.claude("prompt")
-
-
-# ── get_search_queries() fence stripping ──────────────────────────────────────
+# ── get_search_queries() ─────────────────────────────────────────────────────
+#
+# The CLI invocation and fence-stripping this file used to cover now live in
+# services/llm.py and are tested in test_llm.py. What is left here is the
+# script's own contract with the adapter.
 
 class TestGetSearchQueries:
 
-    def _run(self, claude_output: str):
-        with patch.object(mod, "claude", return_value=claude_output):
-            return mod.get_search_queries("some context")
+    def _run(self, reply, **kwargs):
+        with patch.object(mod.llm, "run_json", return_value=reply) as p:
+            return mod.get_search_queries("some context"), p
 
-    def test_parses_clean_json(self):
-        result = self._run('["q1", "q2", "q3", "q4"]')
+    def test_parses_queries(self):
+        result, _ = self._run({"queries": ["q1", "q2", "q3", "q4"]})
         assert result == ["q1", "q2", "q3", "q4"]
 
-    def test_strips_markdown_fences(self):
-        result = self._run('```json\n["q1", "q2", "q3", "q4"]\n```')
-        assert result == ["q1", "q2", "q3", "q4"]
+    def test_constrains_reply_with_a_schema(self):
+        _, p = self._run({"queries": ["q1"]})
+        assert p.call_args.kwargs["schema"] == mod.QUERIES_SCHEMA
 
-    def test_strips_fences_no_lang(self):
-        result = self._run('```\n["q1", "q2"]\n```')
-        assert result == ["q1", "q2"]
+    def test_caps_at_n_suggest(self):
+        result, _ = self._run({"queries": [f"q{i}" for i in range(10)]})
+        assert len(result) == mod.N_SUGGEST
+
+    def test_coerces_to_strings(self):
+        result, _ = self._run({"queries": ["q1", 2]})
+        assert result == ["q1", "2"]
+
+    def test_raises_when_no_queries_returned(self):
+        import pytest
+        with pytest.raises(ValueError, match="no search queries"):
+            self._run({"queries": []})
+
+
+class TestGetReason:
+
+    def test_strips_trailing_period(self):
+        with patch.object(mod.llm, "run", return_value="Deep AI research interviews.\n"):
+            reason = mod.get_reason(["Show A"], {"title": "Show B"})
+        assert reason == "Deep AI research interviews"
 
 
 # ── Deduplication / filtering ─────────────────────────────────────────────────

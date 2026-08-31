@@ -15,3 +15,5 @@ frontend/dist/
 test-results/
 .omc/
 sync.log
+.venv/
+venv/

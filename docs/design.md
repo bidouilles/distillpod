@@ -1,6 +1,13 @@
 # DistillPod — Design Document
 _Version 0.1 · February 2026_
 
+> [!NOTE]
+> **Historical record.** This captures the original design and the reasoning behind it,
+> including the decision to shell out to the Claude CLI rather than call a paid API.
+> That reasoning still holds, but this fork now runs the **Codex CLI** by default and
+> routes every model call through `backend/services/llm.py`. For what the system does
+> today, see [`architecture.md`](architecture.md) §9 — this file is left as written.
+
 ---
 
 ## 1. Overview

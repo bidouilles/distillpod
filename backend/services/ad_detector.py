@@ -1,12 +1,32 @@
 import json
 import os
-import re
 import subprocess
 import tempfile
 from pathlib import Path
 
 from config import settings
-CLAUDE_BIN = settings.claude
+from services import llm
+
+ADS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "ads": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "start": {"type": "number"},
+                    "end": {"type": "number"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["start", "end", "reason"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["ads"],
+    "additionalProperties": False,
+}
 
 def _format_time(seconds: float) -> str:
     m = int(seconds // 60)
@@ -14,7 +34,7 @@ def _format_time(seconds: float) -> str:
     return f'{m:02d}:{s:02d}'
 
 def _words_to_segments(words: list[dict], chunk_sec: float = 30.0) -> list[dict]:
-    '''Group words into ~30s segments for Claude context.'''
+    '''Group words into ~30s segments for model context.'''
     if not words:
         return []
     segments = []
@@ -41,7 +61,7 @@ def _words_to_segments(words: list[dict], chunk_sec: float = 30.0) -> list[dict]
 def detect_ads(words_json: str) -> list[dict]:
     '''
     Returns list of {start, end, reason} dicts for detected ad breaks.
-    Uses Claude to identify sponsor reads/ads from transcript.
+    Uses the agent CLI to identify sponsor reads/ads from transcript.
     '''
     words = json.loads(words_json) if isinstance(words_json, str) else words_json
     if not words or words[-1]['end'] < 120:  # skip very short episodes
@@ -50,7 +70,7 @@ def detect_ads(words_json: str) -> list[dict]:
     segments = _words_to_segments(words, chunk_sec=30)
     total_duration = words[-1]['end']
 
-    # Cap context sent to Claude: ads live in first/last 20 min only.
+    # Cap context sent to the model: ads live in first/last 20 min only.
     # Apply to any episode longer than 30 minutes to avoid timeouts.
     MAX_WINDOW_SEC = 20 * 60  # 20 minutes
     if total_duration > 30 * 60:
@@ -60,7 +80,7 @@ def detect_ads(words_json: str) -> list[dict]:
         tail = [s for s in tail if s not in head]
         segments = head + tail
 
-    # Build transcript with timestamps for Claude
+    # Build transcript with timestamps for the model
     lines = []
     for seg in segments:
         t = f'[{_format_time(seg["start"])}-{_format_time(seg["end"])}]'
@@ -70,7 +90,7 @@ def detect_ads(words_json: str) -> list[dict]:
     prompt = (
         'You are analyzing a podcast transcript to identify advertisements and sponsor reads.\n'
         'Each line shows [start-end timestamp] followed by the spoken text.\n\n'
-        'Return ONLY a JSON array of ad segments found. Each object must have:\n'
+        'Return the ad segments found under the "ads" key. For each one:\n'
         '  start: number (seconds, match the timestamp shown)\n'
         '  end: number (seconds, match the timestamp shown)\n'
         '  reason: string (brief description e.g. "sponsor read for Squarespace")\n\n'
@@ -78,41 +98,33 @@ def detect_ads(words_json: str) -> list[dict]:
         '- Only flag clear ads, sponsor reads, and promotional content\n'
         '- Include pre-roll and mid-roll ads\n'
         '- Do NOT flag: episode intros, outros, calls-to-subscribe, host banter\n'
-        '- If NO ads found, return exactly: []\n'
-        '- Return ONLY the JSON array, nothing else\n\n'
+        '- If NO ads are present, return an empty "ads" array\n\n'
         f'Total episode duration: {_format_time(total_duration)}\n\n'
         f'Transcript:\n{transcript_text}'
     )
 
-    result = subprocess.run(
-        [CLAUDE_BIN, '--print', prompt],
-        capture_output=True, text=True, timeout=300
-    )
-    raw = result.stdout.strip()
+    # Ad detection is best-effort: a failure means "keep the original audio",
+    # never a broken episode, so fall back to an empty list.
+    data = llm.run_json(prompt, schema=ADS_SCHEMA, timeout=300, default={'ads': []})
+    ads = data.get('ads', []) if isinstance(data, dict) else []
 
-    # Strip markdown fences if present
-    raw = re.sub(r'^```(?:json)?', '', raw).strip()
-    raw = re.sub(r'```$', '', raw).strip()
-
-    try:
-        ads = json.loads(raw)
-        if not isinstance(ads, list):
-            return []
-        # Validate and clamp to episode duration
-        validated = []
-        for ad in ads:
-            if isinstance(ad, dict) and 'start' in ad and 'end' in ad:
-                start = max(0.0, float(ad['start']))
-                end = min(float(ad['end']), total_duration)
-                if end > start + 5:  # minimum 5s to count as ad
-                    validated.append({
-                        'start': start,
-                        'end': end,
-                        'reason': ad.get('reason', 'advertisement')
-                    })
-        return validated
-    except (json.JSONDecodeError, ValueError):
-        return []
+    # Validate and clamp to episode duration
+    validated = []
+    for ad in ads:
+        if not isinstance(ad, dict) or 'start' not in ad or 'end' not in ad:
+            continue
+        try:
+            start = max(0.0, float(ad['start']))
+            end = min(float(ad['end']), total_duration)
+        except (TypeError, ValueError):
+            continue
+        if end > start + 5:  # minimum 5s to count as ad
+            validated.append({
+                'start': start,
+                'end': end,
+                'reason': ad.get('reason', 'advertisement')
+            })
+    return validated
 
 def remove_ads_from_audio(audio_path: str, ads: list[dict], output_path: str) -> bool:
     '''

@@ -6,7 +6,7 @@ AI-powered podcast player with transcription, AI chat, gist extraction, ad remov
 
 - **Backend:** Python 3 / FastAPI / uvicorn / aiosqlite (SQLite with WAL)
 - **Frontend:** React 18 / TypeScript / Vite / Tailwind CSS / Zustand
-- **AI:** Claude CLI (`claude --print`) called via subprocess; faster-whisper for transcription
+- **AI:** Codex CLI (`codex exec`) called via subprocess through `services/llm.py`; faster-whisper for transcription
 - **Auth:** Google OAuth2 with JWT session cookies (authlib + python-jose)
 - **External API:** Podcast Index API for search/discovery
 
@@ -59,7 +59,9 @@ Env file: `/etc/distillpod.env` (mode 600, owned by root, loaded via `Environmen
 |---|---|
 | `PODCAST_INDEX_API_KEY` | Podcast Index API key |
 | `PODCAST_INDEX_SECRET` | Podcast Index API secret |
-| `CLAUDE_BIN` | Path to Claude CLI binary (optional, falls back to PATH) |
+| `LLM_BACKEND` | Agent CLI: `codex` (default) or `claude` |
+| `LLM_BIN` | Path to the CLI binary (optional, falls back to PATH) |
+| `LLM_MODEL` | Model passed to `codex exec -m` (optional) |
 | `PUBLIC_URL` | Public-facing domain (CORS, OAuth redirect, report URLs) |
 | `GOOGLE_CLIENT_ID` | Google OAuth2 client ID |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth2 client secret |
@@ -83,10 +85,11 @@ backend/
     podcasts.py        # Search, subscribe, feed, suggestions
     player.py          # Download, stream audio, transcription status, chapters
     gists.py           # Create/list/delete AI gists (distillations)
-    chat.py            # Per-episode AI chat (Claude subprocess)
+    chat.py            # Per-episode AI chat
     research.py        # Deep research reports from gists
     auth.py            # Google OAuth2 login/logout
   services/
+    llm.py             # Agent CLI adapter — the ONLY place a model is invoked
     podcast_index.py   # Podcast Index API client
     rss.py             # RSS feed parser
     downloader.py      # Episode audio downloader
@@ -107,6 +110,13 @@ scripts/
 - The backend serves the built frontend as a SPA catch-all -- no separate web server needed.
 - Protected API routes: `/gists`, `/podcasts`, `/player`. Auth routes and frontend assets are public.
 - `TEST_MODE=true` bypasses auth entirely -- never set in production.
-- Claude is invoked as a CLI subprocess (`claude --print <prompt>`), not via API.
+- The model is invoked as a CLI subprocess, never via an HTTP API. Every call goes
+  through `services/llm.py` — add features there, not with a new `subprocess.run`.
+- `codex exec` writes a banner, reasoning trace and token count to stdout, so the
+  adapter reads the answer from `-o/--output-last-message` instead. For structured
+  replies it passes a JSON Schema via `--output-schema`, which is why callers no
+  longer strip markdown fences.
+- Each call runs with `--sandbox read-only --ephemeral` in a throwaway working
+  directory, so the model cannot see or act on this repo.
 - Background tasks (transcription, research) run via `asyncio.create_task` -- they do not survive restarts.
-- Git remote: `git@github.com:andrepaim/distillpod.git`
+- Git remote: `upstream` -> `https://github.com/andrepaim/distillpod.git` (fork of andrepaim/distillpod).
