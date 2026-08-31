@@ -311,11 +311,30 @@ Two caveats worth knowing:
 - **No ad detection on the caption path.** Ad segmentation runs as part of an STT
   transcription, so a captioned video skips it. Sponsor segments stay in.
 
-**The channel becomes a subscription** so videos group under whoever made them
-and the home feed (which joins on subscriptions) can show them. It is not
-polled: the nightly sync skips `yt-` subscriptions, because videos are added one
-at a time on purpose. The uploader's own chapter marks are imported when present
-— free, and better than generated ones.
+**Paste a channel link to subscribe to it** — `youtube.com/@LowLevelTV`, its
+`/videos` tab, or a `/channel/UC…` URL all work. New uploads then arrive nightly
+the way a podcast's episodes do, and the channel appears in your library like
+any other show. Adding a single video also creates its channel as a
+subscription, so videos group under whoever made them.
+
+**Regular videos only.** Shorts and live streams never arrive. The listing comes
+from the channel's `/videos` tab, which excludes both by construction, with a
+duration floor and a live-status check as a backstop.
+
+**A subscription costs no disk.** Episodes are created from the listing alone,
+and audio is only ever downloaded when you actually play something. Where a
+video has captions, its transcript costs nothing either.
+
+Two requests per channel and none per video, which is deliberate: asking yt-dlp
+for each video's metadata on subscribing was enough to trip YouTube's "confirm
+you're not a bot" check and get the address refused for a while. The `/videos`
+tab says which uploads count and how long they run; the channel's Atom feed
+supplies the publish dates the tab returns as null for some channels. The
+transcript pass is the only part still costing a call per video, so it is capped
+and spaced out — whatever it does not reach transcribes on first play.
+
+The uploader's own chapter marks are imported when present — free, and better
+than generated ones.
 
 Re-adding a video you already have is a no-op that returns the existing episode.
 

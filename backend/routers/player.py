@@ -294,6 +294,122 @@ async def get_transcript(episode_id: str):
     }
 
 
+@router.get("/brief/{episode_id}")
+async def episode_brief(episode_id: str):
+    """What this episode is about, in a couple of lines.
+
+    Generated the first time an episode is opened and stored on the row, so it
+    is paid for once and only for episodes actually looked at. Written into the
+    same `summary` column the nightly chapterizer uses, so the page renders it
+    through the path that already exists.
+    """
+    db = await get_db()
+    try:
+        row = await db.execute_fetchone(
+            "SELECT title, summary, transcript_status FROM episodes WHERE id = ?",
+            (episode_id,),
+        )
+        if not row:
+            raise HTTPException(404, "Episode not found")
+        if row["summary"]:
+            return {"episode_id": episode_id, "summary": row["summary"], "generated": False}
+        if row["transcript_status"] != "done":
+            return {"episode_id": episode_id, "summary": None, "generated": False}
+
+        transcript = await db.execute_fetchone(
+            "SELECT words_json FROM transcripts WHERE episode_id = ?", (episode_id,)
+        )
+        if not transcript:
+            return {"episode_id": episode_id, "summary": None, "generated": False}
+
+        from services.note_builder import brief as build_brief
+        loop = asyncio.get_event_loop()
+        summary = await loop.run_in_executor(
+            None, build_brief, transcript["words_json"], row["title"]
+        )
+        if summary:
+            await db.execute(
+                "UPDATE episodes SET summary = ? WHERE id = ?", (summary, episode_id)
+            )
+            await db.commit()
+        return {"episode_id": episode_id, "summary": summary, "generated": bool(summary)}
+    finally:
+        await db.close()
+
+
+@router.get("/export/{episode_id}")
+async def export_note(episode_id: str, enrich: bool = True):
+    """The episode as one Markdown note, for pasting into a vault.
+
+    `enrich=false` returns immediately from what is already stored — summary,
+    chapters, highlights. With enrichment it adds key points, what the episode
+    mentioned, and a diagram of its argument, which costs one model call the
+    first time and is cached after.
+    """
+    db = await get_db()
+    try:
+        row = await db.execute_fetchone(
+            """SELECT e.*, s.title AS podcast_title
+               FROM episodes e
+               LEFT JOIN subscriptions s ON s.podcast_id = e.podcast_id
+               WHERE e.id = ?""",
+            (episode_id,),
+        )
+        if not row:
+            raise HTTPException(404, "Episode not found")
+        episode = dict(row)
+
+        chapters = [dict(r) for r in await db.execute_fetchall(
+            "SELECT title, start_time FROM chapters WHERE episode_id = ? ORDER BY start_time",
+            (episode_id,),
+        )]
+        gists = [dict(r) for r in await db.execute_fetchall(
+            "SELECT start_seconds, text, summary, auto FROM gists WHERE episode_id = ? "
+            "ORDER BY start_seconds",
+            (episode_id,),
+        )]
+
+        extras = None
+        if enrich:
+            cached = await db.execute_fetchone(
+                "SELECT extras_json FROM episode_notes WHERE episode_id = ?", (episode_id,)
+            )
+            if cached:
+                try:
+                    extras = json.loads(cached["extras_json"])
+                except ValueError:
+                    extras = None
+            else:
+                transcript = await db.execute_fetchone(
+                    "SELECT words_json FROM transcripts WHERE episode_id = ?", (episode_id,)
+                )
+                if transcript:
+                    from services.note_builder import enrich as build_extras
+                    loop = asyncio.get_event_loop()
+                    extras = await loop.run_in_executor(
+                        None, build_extras, transcript["words_json"], episode["title"]
+                    )
+                    if extras:
+                        await db.execute(
+                            """INSERT OR REPLACE INTO episode_notes
+                               (episode_id, extras_json, created_at) VALUES (?, ?, ?)""",
+                            (episode_id, json.dumps(extras),
+                             datetime.now(timezone.utc).isoformat()),
+                        )
+                        await db.commit()
+    finally:
+        await db.close()
+
+    from services.note_builder import build_markdown
+    markdown = build_markdown(episode, chapters, gists, extras)
+    return {
+        "episode_id": episode_id,
+        "title": episode["title"],
+        "enriched": bool(extras),
+        "markdown": markdown,
+    }
+
+
 @router.get("/chapters/{episode_id}")
 async def get_chapters(episode_id: str):
     """Return chapters and summary for an episode."""

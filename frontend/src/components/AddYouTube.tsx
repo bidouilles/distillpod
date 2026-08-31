@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { addYoutubeVideo, getTranscriptStatus, YouTubeAddResult } from "../api/client";
+import { addYoutubeVideo, getEpisodes, getTranscriptStatus, YouTubeAddResult } from "../api/client";
 
 const fmtDuration = (s?: number) => {
   if (!s) return "";
@@ -24,33 +24,56 @@ export default function AddYouTube() {
   const [error, setError] = useState("");
   const [added, setAdded] = useState<YouTubeAddResult | null>(null);
   const [status, setStatus] = useState<string>("");
+  const [imported, setImported] = useState<number | null>(null);
   const poll = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   // Poll until the transcript settles. Captions land in seconds; a video with
   // none falls back to speech-to-text and can take minutes.
   useEffect(() => {
     clearInterval(poll.current);
-    if (!added || status === "done" || status === "error") return;
+    // A channel has no transcript of its own to wait on; its videos are
+    // imported in the background and appear on the channel page.
+    const episodeId = added?.kind === "video" ? added.episode_id : undefined;
+    if (!episodeId || status === "done" || status === "error") return;
     poll.current = setInterval(async () => {
       try {
-        const r = await getTranscriptStatus(added.episode_id);
+        const r = await getTranscriptStatus(episodeId);
         setStatus(r.status);
       } catch { /* keep polling; a transient failure is not fatal */ }
     }, 3000);
     return () => clearInterval(poll.current);
   }, [added, status]);
 
+  // A channel imports in the background, so the card has to stop claiming it is
+  // still importing once the episodes are in.
+  useEffect(() => {
+    if (!added || added.kind !== "channel") return;
+    let stop = false;
+    let tries = 0;
+    const tick = async () => {
+      tries += 1;
+      try {
+        const eps = await getEpisodes(added.podcast_id);
+        if (stop) return;
+        if (eps.length > 0) { setImported(eps.length); return; }
+      } catch { /* transient */ }
+      if (!stop && tries < 20) setTimeout(tick, 3000);
+    };
+    tick();
+    return () => { stop = true; };
+  }, [added]);
+
   const submit = async () => {
     const trimmed = url.trim();
     if (!trimmed || busy) return;
-    setBusy(true); setError(""); setAdded(null); setStatus("");
+    setBusy(true); setError(""); setAdded(null); setStatus(""); setImported(null);
     try {
       const r = await addYoutubeVideo(trimmed);
       setAdded(r);
-      setStatus(r.already_added ? "done" : "queued");
+      setStatus(r.kind === "channel" ? "done" : r.already_added ? "done" : "queued");
       setUrl("");
     } catch {
-      setError("Could not add that video. Check the link is a single YouTube video.");
+      setError("Could not add that. Check the link is a YouTube video or channel.");
     } finally {
       setBusy(false);
     }
@@ -70,8 +93,8 @@ export default function AddYouTube() {
           value={url}
           onChange={e => setUrl(e.target.value)}
           onKeyDown={e => e.key === "Enter" && submit()}
-          placeholder="Paste a YouTube link…"
-          aria-label="YouTube video URL"
+          placeholder="Paste a video or channel link…"
+          aria-label="YouTube video or channel URL"
           inputMode="url"
           autoCapitalize="off"
           autoCorrect="off"
@@ -98,9 +121,13 @@ export default function AddYouTube() {
           <div className="flex-1 min-w-0">
             <div className="font-semibold text-sm line-clamp-2">{added.title}</div>
             <div className="text-gray-400 text-xs mt-0.5">
-              {[added.channel, fmtDuration(added.duration_seconds)].filter(Boolean).join(" · ")}
+              {added.kind === "channel"
+                ? (imported === null
+                    ? "Subscribed · importing recent videos…"
+                    : `Subscribed · ${imported} video${imported === 1 ? "" : "s"} imported`)
+                : [added.channel, fmtDuration(added.duration_seconds)].filter(Boolean).join(" · ")}
             </div>
-            <div className={`text-xs mt-1 ${status === "error" ? "text-amber-400" : "text-indigo-400"}`}>
+            <div className={`text-xs mt-1 ${status === "error" ? "text-amber-400" : "text-indigo-400"} ${added.kind === "channel" ? "hidden" : ""}`}>
               {status !== "done" && status !== "error" && (
                 <span className="inline-block w-3 h-3 mr-1.5 align-[-1px] border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
               )}
@@ -108,10 +135,12 @@ export default function AddYouTube() {
               {added.already_added && " · already in your library"}
             </div>
             <button
-              onClick={() => nav(`/player/${added.episode_id}`)}
+              onClick={() => nav(added.kind === "channel"
+                ? `/subscriptions/${added.podcast_id}`
+                : `/player/${added.episode_id}`)}
               className="mt-2 bg-indigo-700 hover:bg-indigo-600 text-white text-xs px-3 py-1.5 rounded font-medium"
             >
-              Open episode →
+              {added.kind === "channel" ? "Open channel →" : "Open episode →"}
             </button>
           </div>
         </div>
@@ -119,9 +148,10 @@ export default function AddYouTube() {
 
       {!added && !error && (
         <p className="text-gray-600 text-xs">
-          The video joins your feed as an episode: audio, transcript, distills and chat,
-          grouped under its channel. Captions are used when the video has them, otherwise
-          it is transcribed like any podcast.
+          A video joins your feed as an episode. A channel link subscribes to it, so new
+          uploads arrive nightly like a podcast — regular videos only, no Shorts or live
+          streams. Captions are used where they exist, so a subscription costs no disk
+          until you play something.
         </p>
       )}
     </div>

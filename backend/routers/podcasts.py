@@ -190,7 +190,24 @@ async def get_episodes(podcast_id: str, refresh: bool = False, limit: int = 100,
             )
             if not row:
                 raise HTTPException(404, "Podcast not subscribed")
-            episodes = await rss.fetch_episodes(row["feed_url"], podcast_id)
+
+            # A YouTube channel has no RSS to parse — its stored feed_url is the
+            # /videos tab, an HTML page. Refreshing one has to go through the
+            # channel sync, or the button on its page silently does nothing.
+            if podcast_id.startswith("yt-"):
+                # Holds this connection open across the sync, which opens its
+                # own. Safe in WAL mode, and it avoids closing a connection the
+                # enclosing `finally` will close again if the sync raises.
+                from services import youtube_library
+                try:
+                    await youtube_library.sync_channel(
+                        podcast_id[len("yt-"):], transcribe=False
+                    )
+                except Exception as exc:
+                    raise HTTPException(502, f"Could not refresh the channel: {exc}")
+                episodes = []
+            else:
+                episodes = await rss.fetch_episodes(row["feed_url"], podcast_id)
             for ep in episodes:
                 await db.execute(
                     """INSERT OR IGNORE INTO episodes

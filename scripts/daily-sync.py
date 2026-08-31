@@ -53,6 +53,92 @@ def _telegram_notify(message: str) -> None:
         log.warning(f"Telegram notify failed: {e}")
 
 
+async def auto_snip_recent(db, podcast_id: str, podcast_title: str) -> int:
+    """Pick highlights for recently transcribed episodes. Returns how many.
+
+    Scoped by recency and capped, unlike chapterization: each episode is a
+    model call over a whole transcript, so an unscoped query would take on the
+    entire back catalogue the first night it ran.
+    """
+    snipped = 0
+    snip_cutoff = (datetime.now(timezone.utc) - timedelta(hours=RECENCY_HOURS)).isoformat()
+    rows = await db.execute_fetchall(
+        """SELECT e.id, e.title FROM episodes e
+           WHERE e.podcast_id = ? AND e.transcript_status = 'done'
+             AND e.published_at > ?
+             AND NOT EXISTS (
+               SELECT 1 FROM gists g WHERE g.episode_id = e.id AND g.auto = 1
+             )
+           ORDER BY e.published_at DESC
+           LIMIT ?""",
+        (podcast_id, snip_cutoff, MAX_AUTO_SNIP_EPISODES),
+    )
+    for ep_row in rows:
+        ep_id = ep_row['id']
+        try:
+            from services.auto_snipper import pick_snips, build_rows
+            transcript_row = await db.execute_fetchone(
+                'SELECT words_json FROM transcripts WHERE episode_id = ?', (ep_id,)
+            )
+            if not transcript_row:
+                continue
+            log.info(f'  Auto-snipping: {ep_row["title"][:50]}')
+
+            loop = asyncio.get_event_loop()
+            snips = await loop.run_in_executor(None, pick_snips, transcript_row['words_json'])
+            if not snips:
+                log.info('  no auto-snips picked')
+                continue
+
+            gist_rows = build_rows(snips, ep_id, podcast_id, ep_row['title'], podcast_title)
+            await db.executemany(
+                """INSERT INTO gists
+                   (id, episode_id, podcast_id, episode_title, podcast_title,
+                    start_seconds, end_seconds, text, summary, created_at, auto)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                gist_rows,
+            )
+            await db.commit()
+            snipped += len(gist_rows)
+            log.info(f'  \u2713 {len(gist_rows)} auto-snip(s) saved')
+        except Exception as exc:
+            # Never fatal: the episode is still transcribed and chaptered.
+            log.warning(f'  Auto-snip failed for {ep_id}: {exc}')
+            continue
+    return snipped
+
+
+async def process_youtube_channel(podcast_id: str, title: str) -> dict:
+    """Pull a subscribed channel's new long-form uploads in.
+
+    Cheaper than a podcast: a captioned video is transcribed without
+    downloading any audio, so a subscription costs no disk until something is
+    actually played. Shorts and live streams never arrive at all.
+    """
+    log.info(f"\u25b6 {title} (YouTube channel)")
+    stats = {"new": 0, "downloaded": 0, "transcribed": 0, "skipped": 0, "snipped": 0}
+    channel_id = podcast_id[len("yt-"):]
+
+    try:
+        from services.youtube_library import sync_channel
+        result = await sync_channel(channel_id)
+    except Exception as exc:
+        log.error(f"  channel sync failed: {exc}")
+        return stats
+
+    stats["new"] = result["new"]
+    stats["transcribed"] = result["transcribed"]
+    log.info(f"  {result['listed']} listed, {result['new']} new, "
+             f"{result['transcribed']} transcribed from captions")
+
+    db = await get_db()
+    try:
+        stats["snipped"] = await auto_snip_recent(db, podcast_id, title)
+    finally:
+        await db.close()
+    return stats
+
+
 async def process_subscription(podcast_id: str, feed_url: str, title: str) -> dict:
     log.info(f"▶ {title}")
     stats = {"new": 0, "downloaded": 0, "transcribed": 0, "skipped": 0, "snipped": 0}
@@ -255,59 +341,7 @@ async def process_subscription(podcast_id: str, feed_url: str, title: str) -> di
                 await db.commit()
                 continue
 
-        # Auto-snips (after transcription + chapters)
-        #
-        # Scoped to recent episodes, unlike chapterization: each one costs a
-        # model call over a whole transcript, and on the first night after this
-        # shipped an unscoped query would try the entire back catalogue.
-        snip_cutoff = (datetime.now(timezone.utc) - timedelta(hours=RECENCY_HOURS)).isoformat()
-        episodes_for_snips = await db.execute_fetchall(
-            """SELECT e.id, e.title FROM episodes e
-               WHERE e.podcast_id = ? AND e.transcript_status = 'done'
-                 AND e.published_at > ?
-                 AND NOT EXISTS (
-                   SELECT 1 FROM gists g WHERE g.episode_id = e.id AND g.auto = 1
-                 )
-               ORDER BY e.published_at DESC
-               LIMIT ?""",
-            (podcast_id, snip_cutoff, MAX_AUTO_SNIP_EPISODES),
-        )
-        for ep_row in episodes_for_snips:
-            ep_id = ep_row['id']
-            try:
-                from services.auto_snipper import pick_snips, build_rows
-                transcript_row = await db.execute_fetchone(
-                    'SELECT words_json FROM transcripts WHERE episode_id = ?', (ep_id,)
-                )
-                if not transcript_row:
-                    continue
-                log.info(f'  Auto-snipping: {ep_row["title"][:50]}')
-
-                loop = asyncio.get_event_loop()
-                snips = await loop.run_in_executor(
-                    None, pick_snips, transcript_row['words_json']
-                )
-                if not snips:
-                    log.info('  no auto-snips picked')
-                    continue
-
-                rows = build_rows(snips, ep_id, podcast_id, ep_row['title'], title)
-                await db.executemany(
-                    """INSERT INTO gists
-                       (id, episode_id, podcast_id, episode_title, podcast_title,
-                        start_seconds, end_seconds, text, summary, created_at, auto)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    rows,
-                )
-                await db.commit()
-                stats['snipped'] = stats.get('snipped', 0) + len(rows)
-                log.info(f'  \u2713 {len(rows)} auto-snip(s) saved')
-
-            except Exception as exc:
-                # Never fatal: a missing auto-snip costs the user nothing, and
-                # the episode is still fully transcribed and chaptered.
-                log.warning(f'  Auto-snip failed for {ep_id}: {exc}')
-                continue
+        stats['snipped'] += await auto_snip_recent(db, podcast_id, title)
 
         # Update last_checked timestamp
         await db.execute(
@@ -412,16 +446,14 @@ async def main() -> None:
 
     total = {"new": 0, "downloaded": 0, "transcribed": 0, "skipped": 0, "snipped": 0}
     for sub in subs:
-        # A YouTube channel is a subscription only so the feed has something to
-        # join against — videos are added one at a time, on purpose. Its RSS
-        # carries no audio enclosures, so syncing it would fetch a feed every
-        # night to find nothing.
+        # A YouTube channel is polled through its /videos tab rather than an
+        # RSS feed, so it takes a different path — see process_youtube_channel.
         if sub["podcast_id"].startswith("yt-"):
-            log.info(f"⏭ {sub['title']} (YouTube channel — videos are added manually)")
-            continue
-        result = await process_subscription(
-            sub["podcast_id"], sub["feed_url"], sub["title"]
-        )
+            result = await process_youtube_channel(sub["podcast_id"], sub["title"])
+        else:
+            result = await process_subscription(
+                sub["podcast_id"], sub["feed_url"], sub["title"]
+            )
         for k in total:
             total[k] += result[k]
 

@@ -597,3 +597,184 @@ class TestIngest:
         assert not stt_run.called
         eps = await _rows(tmp_db, "SELECT transcript_status FROM episodes WHERE id = ?", (EPISODE_ID,))
         assert eps[0]["transcript_status"] == "error"
+
+
+# ── Channel subscriptions ─────────────────────────────────────────────────────
+
+class TestChannelUrls:
+
+    @pytest.mark.parametrize("url", [
+        "https://www.youtube.com/@LowLevelTV",
+        "https://www.youtube.com/@NetworkChuck/videos",
+        "https://www.youtube.com/@someone/streams",
+        "https://youtube.com/channel/UC6biysICWOJ-C3P4Tyeggzg",
+        "https://www.youtube.com/channel/UC6biysICWOJ-C3P4Tyeggzg/videos",
+        "https://www.youtube.com/c/SomeChannel",
+        "https://www.youtube.com/user/SomeUser",
+    ])
+    def test_channel_urls_are_recognised(self, url):
+        assert youtube.is_channel_url(url)
+
+    @pytest.mark.parametrize("url", [
+        "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+        "https://youtu.be/jNQXAC9IVRw",
+        "https://www.youtube.com/shorts/jNQXAC9IVRw",
+        "https://example.com/@someone",
+        "",
+    ])
+    def test_a_video_is_not_a_channel(self, url):
+        assert not youtube.is_channel_url(url)
+
+    def test_the_listing_url_is_the_videos_tab(self):
+        """Not the Atom feed: the tab is what excludes Shorts and streams."""
+        url = youtube.channel_videos_url("UC6biysICWOJ-C3P4Tyeggzg")
+        assert url.endswith("/videos")
+        assert "UC6biysICWOJ-C3P4Tyeggzg" in url
+
+
+def _entry(vid, duration=600, live=None, ts=1788000000, title="A video"):
+    return {"id": vid, "title": title, "duration": duration,
+            "live_status": live, "timestamp": ts,
+            "url": f"https://www.youtube.com/watch?v={vid}"}
+
+
+def _listing(entries):
+    proc = MagicMock(stdout=json.dumps({"entries": entries}))
+    return patch.object(youtube, "_run", return_value=proc)
+
+
+class TestChannelListing:
+
+    def test_regular_videos_come_through(self):
+        with _listing([_entry("aaaaaaaaaaa"), _entry("bbbbbbbbbbb")]):
+            vids = youtube._channel_videos_blocking("UC123", 15)
+        assert [v["video_id"] for v in vids] == ["aaaaaaaaaaa", "bbbbbbbbbbb"]
+        assert vids[0]["duration_seconds"] == 600
+        assert vids[0]["published_at"] is not None
+
+    def test_shorts_are_left_out(self):
+        """The tab excludes them structurally; this is the backstop."""
+        with _listing([_entry("shortshort", duration=45), _entry("longlonglon")]):
+            vids = youtube._channel_videos_blocking("UC123", 15)
+        assert [v["video_id"] for v in vids] == ["longlonglon"]
+
+    @pytest.mark.parametrize("status", ["is_live", "is_upcoming", "was_live", "post_live"])
+    def test_streams_are_left_out(self, status):
+        with _listing([_entry("streamvideo", live=status), _entry("normalvideo")]):
+            vids = youtube._channel_videos_blocking("UC123", 15)
+        assert [v["video_id"] for v in vids] == ["normalvideo"]
+
+    def test_an_entry_with_no_duration_is_skipped(self):
+        """Usually a stream placeholder rather than something to listen to."""
+        with _listing([_entry("nodurationx", duration=None), _entry("hasduration")]):
+            vids = youtube._channel_videos_blocking("UC123", 15)
+        assert [v["video_id"] for v in vids] == ["hasduration"]
+
+    def test_a_missing_upload_date_is_not_fatal(self):
+        """yt-dlp returns a null timestamp for some channels; verified live."""
+        with _listing([_entry("notimestamp", ts=None)]):
+            vids = youtube._channel_videos_blocking("UC123", 15)
+        assert len(vids) == 1 and vids[0]["published_at"] is None
+
+    def test_an_empty_channel(self):
+        with _listing([]):
+            assert youtube._channel_videos_blocking("UC123", 15) == []
+
+
+class TestChannelIdentity:
+
+    def test_a_feed_import_and_a_manual_add_are_the_same_episode(self):
+        """Otherwise subscribing would duplicate every video already added."""
+        from services import youtube_library
+        from routers.youtube import _episode_id
+        assert youtube_library.episode_id_for("uQV6hYwyjMY") == _episode_id("uQV6hYwyjMY")
+
+    def test_the_channel_subscription_id_matches_the_one_videos_create(self):
+        from services import youtube_library
+        from routers.youtube import _podcast_id
+        channel_id = "UC6biysICWOJ-C3P4Tyeggzg"
+        assert youtube_library.podcast_id_for(channel_id) == _podcast_id({"channel_id": channel_id})
+
+    def test_a_channel_that_cannot_be_resolved_is_an_error(self):
+        proc = MagicMock(stdout=json.dumps({"title": "Something", "entries": []}))
+        with patch.object(youtube, "_run", return_value=proc):
+            with pytest.raises(youtube.YouTubeError, match="which channel"):
+                youtube._resolve_channel_blocking("https://www.youtube.com/@mystery")
+
+    def test_a_channel_id_is_recovered_from_the_url_when_absent(self):
+        proc = MagicMock(stdout=json.dumps({
+            "title": "Low Level",
+            "channel_url": "https://www.youtube.com/channel/UC6biysICWOJ-C3P4Tyeggzg",
+        }))
+        with patch.object(youtube, "_run", return_value=proc):
+            ch = youtube._resolve_channel_blocking("https://www.youtube.com/@LowLevelTV")
+        assert ch["channel_id"] == "UC6biysICWOJ-C3P4Tyeggzg"
+        assert ch["title"] == "Low Level"
+
+
+@pytest.mark.asyncio
+class TestChannelRefresh:
+    """The refresh control on a channel page must not go through the RSS parser."""
+
+    async def test_refreshing_a_channel_syncs_it(self, client):
+        import sqlite3, database
+        conn = sqlite3.connect(database.DB_PATH)
+        conn.execute(
+            "INSERT OR IGNORE INTO subscriptions (podcast_id, feed_url, title, subscribed_at) VALUES (?, ?, ?, ?)",
+            ("yt-UC6biysICWOJ-C3P4Tyeggzg",
+             "https://www.youtube.com/channel/UC6biysICWOJ-C3P4Tyeggzg/videos",
+             "Low Level", "2026-01-01T00:00:00"),
+        )
+        conn.commit(); conn.close()
+
+        with patch("services.youtube_library.sync_channel", AsyncMock(return_value={})) as sync, \
+             patch("services.rss.fetch_episodes", AsyncMock(return_value=[])) as rss_fetch:
+            r = await client.get("/podcasts/yt-UC6biysICWOJ-C3P4Tyeggzg/episodes?refresh=true")
+
+        assert r.status_code == 200
+        sync.assert_awaited_once()
+        assert sync.await_args.args[0] == "UC6biysICWOJ-C3P4Tyeggzg"
+        assert not rss_fetch.called      # the /videos URL is HTML, not a feed
+
+    async def test_a_podcast_still_refreshes_through_rss(self, client, seeded_podcast_id):
+        with patch("services.youtube_library.sync_channel", AsyncMock()) as sync, \
+             patch("services.rss.fetch_episodes", AsyncMock(return_value=[])) as rss_fetch:
+            r = await client.get(f"/podcasts/{seeded_podcast_id}/episodes?refresh=true")
+        assert r.status_code == 200
+        assert rss_fetch.called
+        assert not sync.called
+
+    async def test_a_failed_channel_refresh_surfaces_rather_than_silently_doing_nothing(self, client):
+        import sqlite3, database
+        conn = sqlite3.connect(database.DB_PATH)
+        conn.execute(
+            "INSERT OR IGNORE INTO subscriptions (podcast_id, feed_url, title, subscribed_at) VALUES (?, ?, ?, ?)",
+            ("yt-UCbroken", "https://www.youtube.com/channel/UCbroken/videos", "Broken", "2026-01-01T00:00:00"),
+        )
+        conn.commit(); conn.close()
+
+        with patch("services.youtube_library.sync_channel",
+                   AsyncMock(side_effect=youtube.YouTubeError("rate limited"))):
+            r = await client.get("/podcasts/yt-UCbroken/episodes?refresh=true")
+        assert r.status_code == 502
+        assert "rate limited" in r.json()["detail"]
+
+
+class TestListingDates:
+    """A missing publish date sinks an episode in the feed and puts it outside
+    the nightly recency window, so the listing must always carry one."""
+
+    def test_the_listing_asks_for_approximate_dates(self):
+        proc = MagicMock(stdout=json.dumps({"entries": []}))
+        with patch.object(youtube, "_run", return_value=proc) as run:
+            youtube._channel_videos_blocking("UC123", 15)
+        argv = run.call_args.args[0]
+        assert "--extractor-args" in argv
+        assert "youtubetab:approximate_date" in argv
+
+    def test_the_tab_timestamp_is_used_when_the_feed_is_unreachable(self):
+        """The Atom feed 404s from some addresses; the tab date carries it then."""
+        proc = MagicMock(stdout=json.dumps({"entries": [_entry("aaaaaaaaaaa", ts=1788062400)]}))
+        with patch.object(youtube, "_run", return_value=proc):
+            vids = youtube._channel_videos_blocking("UC123", 15)
+        assert vids[0]["published_at"].year == 2026

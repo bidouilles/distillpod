@@ -1,11 +1,12 @@
 import { useEffect, useState, useRef } from "react";
 import { useParams, useLocation, useNavigate } from "react-router-dom";
 import {
-  getEpisode, getChapters, listGists, createGist, autoSnipEpisode,
+  getEpisode, getChapters, listGists, createGist, autoSnipEpisode, exportNote, getBrief,
   type Gist, type ChaptersResult,
   type Episode,
 } from "../api/client";
 import { useAudio, readProgress, type PlayableEpisode } from "../context/AudioContext";
+import { copyText, downloadText, slugify } from "../lib/clipboard";
 import { useQueue, type QueueItem } from "../stores/queueStore";
 
 function stripHtml(html: string): string {
@@ -178,6 +179,9 @@ export default function Player() {
   const [chaptersData, setChaptersData] = useState<ChaptersResult | null>(null);
   const [gists, setGists]             = useState<Gist[]>([]);
   const [snipping, setSnipping]       = useState(false);
+  const [noteMd, setNoteMd]           = useState<string | null>(null);
+  const [briefing, setBriefing]       = useState(false);
+  const [noteState, setNoteState]     = useState<"idle" | "building" | "copied" | "failed">("idle");
   const snipPoll                      = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const [chaptersOpen, setChaptersOpen] = useState(false);
   const [queueFeedback, setQueueFeedback] = useState<"next" | "end" | null>(null);
@@ -216,6 +220,52 @@ export default function Player() {
   }, [episodeId]);
 
   useEffect(() => () => { if (snipPoll.current) clearInterval(snipPoll.current); }, []);
+
+  // A title is often a hook and a YouTube description is mostly sponsor links,
+  // so neither answers "what is this about". Generated on first open, once, and
+  // stored — the page already knows how to render a summary when one exists.
+  useEffect(() => {
+    if (!episodeId || !chaptersData) return;
+    if (chaptersData.summary) return;
+    if (displayEpisode?.transcript_status !== "done") return;
+    let cancelled = false;
+    setBriefing(true);
+    getBrief(episodeId)
+      .then(r => {
+        if (cancelled || !r.summary) return;
+        setChaptersData(prev => (prev ? { ...prev, summary: r.summary } : prev));
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setBriefing(false); });
+    return () => { cancelled = true; };
+  }, [episodeId, chaptersData, displayEpisode?.transcript_status]);
+
+  // The share sheet is how a note reaches Obsidian on a phone. Not every
+  // browser has it, so it is offered only where it exists — copy and the .md
+  // download cover the rest.
+  const canShare = typeof navigator !== "undefined" && !!navigator.share;
+
+  const shareNote = async () => {
+    if (!noteMd) return;
+    try {
+      await navigator.share({ title: displayEpisode?.title || "Episode note", text: noteMd });
+    } catch { /* dismissed, or the sheet refused — nothing to report */ }
+  };
+
+  const buildNote = async () => {
+    if (!episodeId || noteState === "building") return;
+    setNoteState("building");
+    try {
+      const note = await exportNote(episodeId);
+      setNoteMd(note.markdown);
+      // Copy straight away: on a phone the clipboard is the whole point, and
+      // the download stays available for anyone who wants the file.
+      const ok = await copyText(note.markdown);
+      setNoteState(ok ? "copied" : "failed");
+    } catch {
+      setNoteState("failed");
+    }
+  };
 
   const suggestHighlights = async () => {
     if (!episodeId || snipping) return;
@@ -515,8 +565,18 @@ export default function Player() {
             <p className="text-xs font-semibold text-indigo-400 uppercase tracking-wider mb-2">
               ✦ AI Summary
             </p>
-            <p className="text-sm text-gray-200 leading-relaxed selectable">
+            <p className="text-sm text-gray-200 leading-relaxed selectable whitespace-pre-line">
               {chaptersData.summary}
+            </p>
+          </div>
+        ) : briefing ? (
+          <div className="bg-gray-900 rounded-2xl px-4 py-4">
+            <p className="text-xs font-semibold text-indigo-400 uppercase tracking-wider mb-2">
+              ✦ AI Summary
+            </p>
+            <p className="text-sm text-gray-500 flex items-center gap-2">
+              <span className="w-3 h-3 border-2 border-gray-600 border-t-transparent rounded-full animate-spin inline-block" />
+              Working out what this episode is about…
             </p>
           </div>
         ) : displayEpisode?.description ? (
@@ -620,6 +680,44 @@ export default function Player() {
                   Finding highlights…</>
               : <>⚙ Suggest highlights</>}
           </button>
+        )}
+
+        {/* Export for a vault. Sits with the distills because that is what it
+            mostly carries: the quotes and insights, plus what the model can add
+            in writing that is no use while listening. */}
+        {displayEpisode?.transcript_status === "done" && (
+          <div className="flex gap-2">
+            <button
+              onClick={buildNote}
+              disabled={noteState === "building"}
+              className="flex-1 min-h-[44px] rounded-xl bg-gray-800 hover:bg-gray-700 disabled:opacity-60 text-sm text-gray-200 font-medium transition-colors flex items-center justify-center gap-2"
+            >
+              {noteState === "building"
+                ? <><span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin inline-block" />
+                    Building note…</>
+                : noteState === "copied" ? "✓ Note copied"
+                : noteState === "failed" ? "✗ Try again"
+                : <>📝 Obsidian note</>}
+            </button>
+            {noteMd && canShare && (
+              <button
+                onClick={shareNote}
+                className="min-h-[44px] px-4 rounded-xl bg-indigo-700 hover:bg-indigo-600 text-sm text-white font-medium transition-colors"
+                title="Share the note"
+              >
+                ↗ Share
+              </button>
+            )}
+            {noteMd && (
+              <button
+                onClick={() => downloadText(`${slugify(displayEpisode?.title || "episode")}.md`, noteMd)}
+                className="min-h-[44px] px-4 rounded-xl bg-gray-800 hover:bg-gray-700 text-sm text-gray-300 font-medium transition-colors"
+                title="Download as .md"
+              >
+                ⬇ .md
+              </button>
+            )}
+          </div>
         )}
 
         {/* Empty distills nudge */}

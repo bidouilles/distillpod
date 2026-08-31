@@ -179,12 +179,25 @@ scripts/
 - Voxtral quantises timings to 0.1s and occasionally emits `end < start`;
   `stt._normalise` clamps that. Audio is downmixed to 16 kHz mono before upload,
   which keeps long episodes under the size limit and costs no accuracy.
+- YouTube channels are subscriptions (`services/youtube_library.py`), polled by
+  the nightly sync through `process_youtube_channel`. Episodes are built from
+  two requests for the whole channel and none per video: the `/videos` tab for
+  which uploads count (it excludes Shorts and streams by construction, and
+  carries durations), and the Atom feed for the publish dates the tab returns
+  as null on some channels. Do not "simplify" this into a metadata call per
+  video — ten of those in a row tripped YouTube's bot check and had the address
+  refused for everything, single calls included, for a while afterwards. The
+  transcript pass is the only part that still costs a call per video, so it is
+  capped and spaced; anything it misses transcribes on first play.
+- Feed-imported and hand-added videos share one id scheme (`yt-<videoId>`), so
+  subscribing to a channel cannot duplicate a video already added. The listing
+  upsert is `ON CONFLICT DO NOTHING` because a hand-added row has a description
+  and chapters the listing does not — overwriting would be a downgrade.
 - A YouTube video is ingested as an ordinary `episodes` row, which is why no
   feature had to learn about YouTube. Two things make that work: the channel is
   written as a pseudo-subscription (`yt-<channel_id>`) because the feed joins on
   one, and `services/downloader.py` dispatches YouTube audio_urls to yt-dlp — so
-  play, re-download and the daily sync all get it for free. The nightly sync
-  skips `yt-` subscriptions: a channel's RSS carries no audio enclosures.
+  play, re-download and the daily sync all get it for free.
 - YouTube ingestion depends on a *current* `yt-dlp` on the box, not just any
   yt-dlp: distro packages are years stale (Ubuntu 22.04 ships `2022.04.08` and
   offers nothing newer) and fail to extract at all. The deployed VPS runs the
