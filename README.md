@@ -150,7 +150,9 @@ subscription either way.
 - **🔎 Ask your library** — the question worth asking a library of three hundred episodes is the one that crosses them: *what have I heard about evaluating models?* Search → **Ask**. The model turns the question into keyword searches, the transcript index retrieves the passages, and the answer is written from those alone — with the episode and second behind every claim, so a citation can be tapped to hear it rather than taken on trust. Answers in ~15s over two agent-CLI calls. Only transcribed episodes are searched, and when nothing matches it says so instead of inventing an answer.
 - **💬 Episode chat** — ask questions about any transcribed episode. The model answers using the full transcript as context. History kept per episode (capped at 50 messages). Copy the whole conversation as Markdown or download it as a `.md` file from the chat header.
 - **📺 YouTube videos** — paste a link under Search → **YouTube** and the video joins your library as an ordinary episode: audio you can listen to, a word-level transcript, and every AI feature on top of it. Grouped under its channel, so videos filter and search like any show. See [YouTube videos](#youtube-videos).
-- **🔬 Research** — trigger a deep research report from any distillation. The model generates queries, Tavily runs web searches, then synthesizes findings into an HTML report. Delivered via Telegram.
+- **🔬 Research** — take a moment you found interesting and check it against sources outside the podcast: what actually happened, who disagrees, what has been published since. It is the one feature here that looks beyond your own library.
+  The claim is built from the episode, its summary and the transcript around the moment — not the quote alone, which is often a fragment naming nothing searchable. The model turns that into web searches, and writes a verdict (*supported · mixed · contested · not supported · no evidence*) with sections that cite `[n]` linking to the sources they came from. It also says whether the same subject came up **elsewhere in your library**, which no web search can answer. Delivered via Telegram, with the report at `/reports/…`.
+  **It refuses rather than inventing.** No search key, no results, or no usable synthesis is a failure with the reason attached — never a report. That is not hypothetical: with `TAVILY_API_KEY` unset, every search returned nothing, and the earlier version wrote four sections explaining that it had no sources, marked itself done, and announced it as ready.
 - **📋 Saved** — distillations and bookmarks side by side, each grouped and copyable. Distills keep their Copy / Delete / Research controls; bookmarks jump back to the moment they were kept.
 - **↕️ Up Next** — a server-side queue, so a queue built on the laptop is the queue the phone plays. Reachable from the header on every screen, with a count. Add from the feed while skimming, from an episode page, or by sending a whole playlist to it.
 - **🗂 Playlists, manual and smart** — keep a list by hand, or set a rule and let it fill itself: *unplayed, under 25 minutes, #tech*. A smart playlist is resolved when it is read, so its count is true now rather than when it was made — and it uses the same query builder as the feed's filter chips, so a rule means exactly what the chips mean.
@@ -495,11 +497,12 @@ Copy `.env.example` to `backend/.env` and edit:
 | `PUBLIC_URL` | Yes | Public-facing domain (CORS, OAuth redirect, report URLs) |
 | `PODCAST_INDEX_API_KEY` | No | Podcast Index API key for richer metadata |
 | `PODCAST_INDEX_SECRET` | No | Podcast Index API secret |
-| `TAVILY_API_KEY` | No | Enables deep research reports |
+| `TAVILY_API_KEY` | No | Web search for research. Without it research refuses to run — the agent CLI is sandboxed with no network, so there is nothing to research *with* |
 | `TELEGRAM_BOT_TOKEN` | No | Telegram notifications |
 | `TELEGRAM_CHAT_ID` | No | Telegram chat ID |
 | `STT_BACKEND` | No | `auto` (default), `voxtral`, or `whisper` |
-| `MISTRAL_API_KEY` | No | Mistral key; its presence makes `auto` choose Voxtral |
+| `MISTRAL_API_KEY` | No | Mistral key; its presence makes `auto` choose Voxtral, and embeddings available |
+| `EMBED_BACKEND` | No | `auto` (default), `mistral`, `local`, or `off`. Meaning-based search; `off` keeps every transcript on this box |
 | `STT_MODEL` | No | Voxtral model (default `voxtral-mini-latest`) |
 | `STT_LANGUAGE` | No | ISO code e.g. `fr`; empty auto-detects |
 | `WHISPER_MODEL` | No | Whisper model size: `base`, `small`, `medium` (default), `large-v3` |

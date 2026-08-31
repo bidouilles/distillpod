@@ -5,13 +5,20 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 
 from database import get_db
-from services.researcher import run_research_sync
+from services import researcher
 
 router = APIRouter(prefix="/research", tags=["research"])
 
 
 @router.post("/{gist_id}")
 async def trigger_research(gist_id: str):
+    """Start researching a distilled moment.
+
+    Refuses up front when there is no search API to research *with*: the agent
+    CLI runs sandboxed with no network, so without a key the only possible
+    output is a report explaining that it had no sources — which is what this
+    used to produce, and announce as ready.
+    """
     db = await get_db()
     try:
         # Check if gist exists
@@ -24,6 +31,12 @@ async def trigger_research(gist_id: str):
         if not gist:
             raise HTTPException(status_code=404, detail="Gist not found")
 
+        if not researcher.available():
+            raise HTTPException(
+                status_code=409,
+                detail="Research needs a Tavily API key on the server (TAVILY_API_KEY).",
+            )
+
         # Check if research already exists
         existing = await (
             await db.execute(
@@ -32,7 +45,12 @@ async def trigger_research(gist_id: str):
             )
         ).fetchone()
         if existing:
-            return dict(existing)
+            # A failed attempt is worth retrying — the usual cause was a missing
+            # key or a search that came back empty, both of which change.
+            if existing["status"] != "error":
+                return dict(existing)
+            await db.execute("DELETE FROM researches WHERE gist_id = ?", (gist_id,))
+            await db.commit()
 
         # Create research record
         research_id = str(uuid.uuid4())
@@ -43,17 +61,8 @@ async def trigger_research(gist_id: str):
         )
         await db.commit()
 
-        # Run in background
-        asyncio.create_task(
-            asyncio.to_thread(
-                run_research_sync,
-                research_id,
-                gist_id,
-                gist["text"],
-                gist["summary"] or "",
-                gist["episode_title"],
-            )
-        )
+        # Runs in the background: two model calls and several web searches.
+        asyncio.create_task(researcher.run_research(research_id, gist_id))
 
         return {"id": research_id, "status": "pending"}
     finally:

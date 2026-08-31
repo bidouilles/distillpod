@@ -111,18 +111,22 @@ function GistCard({ gist, podcastImage, onDelete }: { gist: Gist; podcastImage?:
         )}
       </div>
 
-      {/* Research */}
+      {/* Research — checking this moment against sources outside the podcast. */}
       <div className="pt-1">
         {research.status === "none" && (
           <button
-            onClick={() => triggerResearch(gist.id).then(setResearch)}
+            onClick={() =>
+              triggerResearch(gist.id)
+                .then(setResearch)
+                .catch((e: Error) => setResearch({ status: "error", error: e.message }))
+            }
             className="text-xs text-yellow-400 hover:text-yellow-300 px-2 py-0.5 rounded hover:bg-gray-700 transition-colors"
           >
             🔬 Research
           </button>
         )}
         {(research.status === "pending" || research.status === "running") && (
-          <span className="text-xs text-gray-400">⏳ Researching... (3-5 min)</span>
+          <span className="text-xs text-gray-400">⏳ Checking sources… (1–2 min)</span>
         )}
         {research.status === "done" && research.public_url && (
           <button
@@ -134,15 +138,21 @@ function GistCard({ gist, podcastImage, onDelete }: { gist: Gist; podcastImage?:
           </button>
         )}
         {research.status === "error" && (
-          <span className="text-xs text-red-400">
-            ⚠️ Research failed.{" "}
+          <div className="text-xs text-red-400 space-y-1">
+            {/* The reason, not just the fact: "no sources came back for X" tells
+                you to rephrase, a missing key tells you to configure one. */}
+            <div className="leading-relaxed">⚠️ {research.error || "Research failed."}</div>
             <button
-              onClick={() => triggerResearch(gist.id).then(setResearch)}
+              onClick={() =>
+                triggerResearch(gist.id)
+                  .then(setResearch)
+                  .catch((e: Error) => setResearch({ status: "error", error: e.message }))
+              }
               className="underline hover:text-red-300"
             >
-              Retry
+              Try again
             </button>
-          </span>
+          </div>
         )}
       </div>
     </div>

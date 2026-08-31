@@ -285,18 +285,25 @@ class TestResearch:
         r = await client.post("/research/nonexistent_gist")
         assert r.status_code == 404
 
-    async def test_trigger_research_creates_pending(self, client, tmp_db):
+    async def test_trigger_research_creates_pending(self, client, tmp_db, monkeypatch):
         """POST /research/{gist_id} creates a pending research record."""
-        with patch("routers.research.run_research_sync") as mock_sync:
-            r = await client.post(f"/research/{GIST_ID}")
+        from config import settings
+        monkeypatch.setattr(settings, "tavily_api_key", "test-key")
 
+        async def never_runs(research_id, gist_id):
+            return {}
+        monkeypatch.setattr("services.researcher.run_research", never_runs)
+
+        r = await client.post(f"/research/{GIST_ID}")
         assert r.status_code == 200
         data = r.json()
         assert data["status"] == "pending"
         assert "id" in data
 
-    async def test_trigger_research_returns_existing(self, client, tmp_db):
+    async def test_trigger_research_returns_existing(self, client, tmp_db, monkeypatch):
         """POST /research/{gist_id} when research exists returns existing."""
+        from config import settings
+        monkeypatch.setattr(settings, "tavily_api_key", "test-key")
         seed_research(tmp_db, GIST_ID, EPISODE_ID_1, status="done", public_url="https://example.com/report")
 
         r = await client.post(f"/research/{GIST_ID}")

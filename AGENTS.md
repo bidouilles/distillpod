@@ -164,6 +164,15 @@ scripts/
   is only useful because it is cheap, and in a vault six months later, which of
   the two produced a quote is the difference between standing behind it and
   having to check it.
+- **Research refuses rather than degrading.** `services/researcher.py` needs
+  `TAVILY_API_KEY`: the agent CLI runs sandboxed with no network, so a search API
+  is the only way out of the box. With the key unset in production, every search
+  returned `[]`, nothing distinguished that from "no key", the model was asked to
+  analyse sources it had not been given, and the pipeline marked the result
+  `done` and announced it. So: no key or no sources is now an `error` with a
+  reason, and no HTML is written. The premise also includes the episode, its
+  summary and the transcript around the moment — a distilled quote can be five
+  seconds long and name nothing searchable.
 - **Semantic search is optional and opt-in.** `EMBED_BACKEND=auto` resolves to
   Mistral when a key is present, which is usually the case for Voxtral — so the
   *first* index is only ever built by pressing the button

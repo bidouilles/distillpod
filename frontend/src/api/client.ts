@@ -12,7 +12,13 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
     window.location.href = "/";
     throw new Error("Unauthorized");
   }
-  if (!r.ok) throw new Error(`${method} ${path} → ${r.status}`);
+  if (!r.ok) {
+    // FastAPI puts the reason in `detail`, and some of them are worth showing:
+    // "research needs a Tavily key" is actionable, "500" is not.
+    let detail = "";
+    try { detail = (await r.json())?.detail ?? ""; } catch { /* not JSON */ }
+    throw new Error(detail || `${method} ${path} → ${r.status}`);
+  }
   return r.json();
 }
 
@@ -205,6 +211,7 @@ export interface Research {
   id?: string;
   status: "none" | "pending" | "running" | "done" | "error";
   public_url?: string;
+  /** Why it stopped — a missing key, or no sources for what it searched. */
   error?: string;
 }
 

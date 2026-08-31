@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     embed_model: str = "mistral-embed"       # mistral only
     embed_local_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
+    # ── Research (web search) ────────────────────────────────────────────────
+    # Without this, deep research has nothing to read: the agent CLI runs
+    # sandboxed with no network, so the search API is the only way out. Research
+    # refuses to start rather than writing a report from no sources.
+    tavily_api_key: str = ""
+
     @property
     def stt(self) -> str:
         if self.stt_backend in ("voxtral", "mlx", "whisper"):

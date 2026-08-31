@@ -54,9 +54,21 @@ async def create_gist(
     start = max(0.0, current_seconds - context)
     end = current_seconds
 
+    # A tap near the start of an episode used to capture only the seconds before
+    # it: tapping at 0:05 produced a five-second quote that ended mid-sentence,
+    # which is not a moment anyone can use — and research built on one has
+    # nothing to work with. Where there is no room behind the tap, take the room
+    # in front of it instead, so the window is always a usable length.
+    if end - start < context:
+        end = start + context
+
     words = await get_transcript_words(episode_id)
     if not words:
         raise ValueError(f"No transcript available for episode {episode_id}")
+
+    # Never past the end of what was said.
+    spoken_until = float(words[-1].get("end", end)) if words else end
+    end = min(end, max(spoken_until, start + 1.0))
 
     # Filter words in time window
     shot_words = [w for w in words if w["start"] >= start and w["end"] <= end + 1.0]
