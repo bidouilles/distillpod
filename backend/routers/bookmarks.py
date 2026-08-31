@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException
 
 from database import get_db
 from models import Bookmark, BookmarkNote, BookmarkRequest
+from services import timeline
 from services.bookmark_engine import extract
 
 router = APIRouter(prefix="/bookmarks", tags=["bookmarks"])
@@ -95,6 +96,10 @@ async def create_bookmark(body: BookmarkRequest) -> Bookmark:
             at = body.seconds if body.seconds is not None else start
             if at is None:
                 raise HTTPException(422, "Give either text, seconds, or start_seconds")
+            # A moment from the player may be on the clean cut's clock; a span
+            # taken from the transcript is already in the original timeline.
+            if body.seconds is not None:
+                at = await timeline.resolve(db, body.episode_id, at, body.source)
             from services.transcriber import get_transcript_words
             words = await get_transcript_words(body.episode_id)
             found = extract(words, at)

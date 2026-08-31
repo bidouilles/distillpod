@@ -47,7 +47,8 @@ export default function PodcastSettingsEditor({
   const active =
     value.playback_rate != null || value.skip_intro != null ||
     value.skip_outro != null || value.prefer_adfree != null ||
-    value.auto_transcribe === false;
+    value.auto_transcribe === false || value.trim_silence === true ||
+    value.normalize_volume === true;
 
   return (
     <div className="bg-gray-900 rounded-xl overflow-hidden">
@@ -103,6 +104,32 @@ export default function PodcastSettingsEditor({
               Ask each time
             </Pill>
           </Row>
+
+          <Row label="Long pauses">
+            <Pill active={value.trim_silence === true} onClick={() => save({ trim_silence: true })}>
+              Shorten
+            </Pill>
+            <Pill active={value.trim_silence !== true} onClick={() => save({ trim_silence: null })}>
+              Leave
+            </Pill>
+          </Row>
+
+          <Row label="Loudness">
+            <Pill active={value.normalize_volume === true}
+                  onClick={() => save({ normalize_volume: true })}>
+              Level it
+            </Pill>
+            <Pill active={value.normalize_volume !== true}
+                  onClick={() => save({ normalize_volume: null })}>
+              As recorded
+            </Pill>
+          </Row>
+          <p className="text-[11px] text-gray-600 leading-relaxed">
+            Both apply the next time an episode is processed, not to episodes
+            already cleaned. Shortening pauses keeps a beat of each one — speech
+            with every gap closed is exhausting. Levelling the loudness needs a
+            real re-encode, so it costs minutes of CPU per episode.
+          </p>
 
           <Row label="Transcribe">
             <Pill active={value.auto_transcribe !== false} onClick={() => save({ auto_transcribe: null })}>

@@ -252,7 +252,10 @@ async def process_subscription(podcast_id: str, feed_url: str, title: str) -> di
                 )
                 await db.commit()
 
-        # Ad detection + removal (after transcription)
+        # The clean cut: ads out, and pauses shortened or loudness levelled where
+        # the podcast asks for it. Shares one implementation with the first-play
+        # path in services/transcriber.py, so both honour the same settings and
+        # both store the map back to the original timeline.
         episodes_for_ads = await db.execute_fetchall(
             '''SELECT id, local_path FROM episodes
                WHERE podcast_id = ? AND transcript_status = 'done'
@@ -261,30 +264,27 @@ async def process_subscription(podcast_id: str, feed_url: str, title: str) -> di
         )
         for ep_row in episodes_for_ads:
             try:
-                from services.ad_detector import detect_ads, remove_ads_from_audio
+                from pathlib import Path as _Path
+                from services.transcriber import build_clean_cut
                 transcript_row = await db.execute_fetchone(
                     'SELECT words_json FROM transcripts WHERE episode_id = ?', (ep_row['id'],)
                 )
                 if not transcript_row:
                     continue
-                log.info(f'  Ad detection for: {ep_row["id"]}')
-                ads = detect_ads(transcript_row['words_json'])
-                log.info(f'  Found {len(ads)} ad segment(s)')
-                if ads:
-                    adfree_path = ep_row['local_path'].replace('.mp3', '_adfree.mp3').replace('.m4a', '_adfree.m4a')
-                    success = remove_ads_from_audio(ep_row['local_path'], ads, adfree_path)
-                    if success:
-                        await db.execute(
-                            'UPDATE episodes SET adfree_path = ?, ads_detected = ? WHERE id = ?',
-                            (adfree_path, len(ads), ep_row['id'])
-                        )
-                    else:
-                        await db.execute('UPDATE episodes SET ads_detected = 0 WHERE id = ?', (ep_row['id'],))
+                log.info(f'  Cleaning: {ep_row["id"]}')
+                result = await build_clean_cut(
+                    db, ep_row['id'], _Path(ep_row['local_path']),
+                    transcript_row['words_json'],
+                )
+                if result:
+                    log.info(
+                        f'  Removed {result["removed_seconds"]:.0f}s '
+                        f'({result["silence_spans"]} pause(s) measured)'
+                    )
                 else:
-                    await db.execute('UPDATE episodes SET ads_detected = 0 WHERE id = ?', (ep_row['id'],))
-                await db.commit()
+                    log.info('  Nothing worth a second copy')
             except Exception as exc:
-                log.warning(f'  Ad detection failed for {ep_row["id"]}: {exc}')
+                log.warning(f'  Cleaning failed for {ep_row["id"]}: {exc}')
                 continue
 
         # Chapterization (after transcription + ad detection)

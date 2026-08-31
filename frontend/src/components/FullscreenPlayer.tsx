@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import LiveTranscript from "./LiveTranscript";
-import { useAudio } from "../context/AudioContext";
+import { setActiveSource, useAudio } from "../context/AudioContext";
+import { fmtSaved, toCut, toOriginal } from "../lib/timeline";
 import {
   getTranscriptStatus, getAdFreeStatus, getChapters, createGist,
   adFreeAudioUrl, bookmarkMoment,
@@ -80,9 +81,24 @@ export default function FullscreenPlayer() {
   const touchStartY                       = useRef(0);
   const pollRef                           = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // The clean cut runs on its own clock, so everything recorded against the
+  // original — chapters, transcript timings, distills, bookmarks — is converted
+  // at this boundary. `segments` is null whenever the original is playing, and
+  // both helpers are then the identity.
+  const segments = useAdFree ? adFreeStatus?.segments ?? null : null;
+  const inOriginal = (t: number) => toOriginal(segments, t);
+  const inThisFile = (t: number) => toCut(segments, t);
+
+  // Keep the rest of the app in step: progress is stored in the original
+  // timeline, and it is saved from an audio event listener that cannot see this
+  // component's state.
+  useEffect(() => {
+    setActiveSource(segments ? "clean" : "original", segments);
+  }, [segments]);
+
   const chapters           = chaptersData?.chapters ?? [];
   const currentChapterIndex = chapters.reduce((best, ch, i) =>
-    ch.start_time <= currentTime ? i : best, -1);
+    ch.start_time <= inOriginal(currentTime) ? i : best, -1);
   const currentChapter = currentChapterIndex >= 0 ? chapters[currentChapterIndex] : null;
   const progress       = duration > 0 ? (currentTime / duration) * 100 : 0;
   const remaining      = duration - currentTime;
@@ -172,7 +188,13 @@ export default function FullscreenPlayer() {
       : `/player/audio/${episode.id}`;
     if (audio.src.endsWith(newSrc)) return;
     const wasPlaying = !audio.paused;
-    const savedTime  = audio.currentTime;
+    // Carry the position across the two clocks rather than the number across
+    // the two files: switching to the cut at 2:40 of the original should
+    // continue where the listener was, not jump back by the ads removed.
+    const cuts = adFreeStatus?.segments ?? null;
+    const savedTime = useAdFree
+      ? toCut(cuts, audio.currentTime)              // original -> clean
+      : toOriginal(cuts, audio.currentTime);        // clean -> original
     audio.src = newSrc;
     audio.load();
     // Bug 4: Wait for loadedmetadata before seeking — synchronous seek is ignored
@@ -199,7 +221,7 @@ export default function FullscreenPlayer() {
     const audio = audioRef.current;
     if (!audio || currentChapterIndex < 0) return;
     const next = chapters[currentChapterIndex + 1];
-    if (next) audio.currentTime = next.start_time;
+    if (next) audio.currentTime = inThisFile(next.start_time);
   };
 
   const handleGist = async () => {
@@ -207,7 +229,9 @@ export default function FullscreenPlayer() {
     setGisting(true);
     setError("");
     try {
-      await createGist(episode.id, audioRef.current.currentTime);
+      await createGist(
+        episode.id, audioRef.current.currentTime, segments ? "clean" : "original",
+      );
       setGistFlash(true);
       setGistCreated(true);
       setTimeout(() => setGistFlash(false), 800);
@@ -226,7 +250,9 @@ export default function FullscreenPlayer() {
     setMarking(true);
     setError("");
     try {
-      await bookmarkMoment(episode.id, audioRef.current.currentTime);
+      await bookmarkMoment(
+        episode.id, audioRef.current.currentTime, segments ? "clean" : "original",
+      );
       setMarkCount(n => n + 1);
     } catch (e: any) {
       setError(
@@ -519,11 +545,19 @@ export default function FullscreenPlayer() {
               </button>
             </div>
 
-            {/* ── Ad-free toggle ── */}
+            {/* ── Clean cut toggle ──
+                Labelled by what was actually done to this episode: ads out,
+                pauses shortened, or both. "Ad-free" would be a lie on a podcast
+                that has no ads and was only trimmed. */}
             {adFreeStatus?.has_adfree && (
               <div className="flex items-center justify-center gap-3">
                 <span className="text-xs text-white/30">
-                  {adFreeStatus.ads_count} ad{adFreeStatus.ads_count !== 1 ? "s" : ""} detected
+                  {[
+                    adFreeStatus.ads_count > 0
+                      && `${adFreeStatus.ads_count} ad${adFreeStatus.ads_count !== 1 ? "s" : ""}`,
+                    adFreeStatus.trimmed_seconds >= 1
+                      && `${fmtSaved(adFreeStatus.trimmed_seconds)} of pauses`,
+                  ].filter(Boolean).join(" · ") || "cleaned"} removed
                 </span>
                 <div className="flex rounded-full bg-white/10 p-0.5">
                   <button
@@ -537,7 +571,11 @@ export default function FullscreenPlayer() {
                     className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
                       useAdFree ? "bg-white text-gray-900 shadow" : "text-white/50"
                     }`}
-                  >Ad-free ✂️</button>
+                  >
+                    {adFreeStatus.ads_count > 0 && adFreeStatus.trimmed_seconds >= 1
+                      ? "Clean ✂️"
+                      : adFreeStatus.ads_count > 0 ? "Ad-free ✂️" : "Trimmed ✂️"}
+                  </button>
                 </div>
               </div>
             )}
@@ -681,7 +719,7 @@ export default function FullscreenPlayer() {
                 key={i}
                 onClick={() => {
                   const audio = audioRef.current;
-                  if (audio) audio.currentTime = ch.start_time;
+                  if (audio) audio.currentTime = inThisFile(ch.start_time);
                   setChaptersOpen(false);
                 }}
                 className={`w-full flex items-center gap-3 px-5 py-3.5 text-left hover:bg-gray-800/50 transition-colors ${
@@ -745,7 +783,8 @@ export default function FullscreenPlayer() {
               episodeId={episode.id}
               audioRef={audioRef}
               open={transcriptOpen}
-              onSeek={(secs) => { const a = audioRef.current; if (a) a.currentTime = secs; }}
+              toOriginal={inOriginal}
+              onSeek={(secs) => { const a = audioRef.current; if (a) a.currentTime = inThisFile(secs); }}
               onBookmarked={() => setMarkCount(n => n + 1)}
             />
           )}

@@ -4,6 +4,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from database import get_db
 from models import Gist, GistRequest
+from services import timeline
 from services.snip_engine import create_gist
 
 log = logging.getLogger(__name__)
@@ -20,6 +21,10 @@ async def make_gist(req: GistRequest) -> Gist:
     """
     Create an AI distillation at the current playback position.
     Extracts the transcript window and passes it to Claude for a quote + insight.
+
+    `source: "clean"` says the position came from the ad-free/trimmed file,
+    which runs on its own clock. Without translating it, a distill taken while
+    listening to that cut quoted a passage minutes away from what was heard.
     """
     db = await get_db()
     row = await db.execute_fetchone(
@@ -29,6 +34,7 @@ async def make_gist(req: GistRequest) -> Gist:
            WHERE e.id = ?""",
         (req.episode_id,),
     )
+    at_seconds = await timeline.resolve(db, req.episode_id, req.current_seconds, req.source)
     await db.close()
 
     if not row:
@@ -41,7 +47,7 @@ async def make_gist(req: GistRequest) -> Gist:
         podcast_id=row["podcast_id"],
         episode_title=row["title"],
         podcast_title=row["podcast_title"],
-        current_seconds=req.current_seconds,
+        current_seconds=at_seconds,
         with_summary=True,
     )
 

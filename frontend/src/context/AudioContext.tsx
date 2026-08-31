@@ -4,8 +4,9 @@ import {
 } from "react";
 import {
   startPlay, getEpisode, audioStreamUrl, getProgress, putProgress,
-  getDownloadStatus, type Episode, type PodcastSettings,
+  getDownloadStatus, type AudioSource, type Episode, type PodcastSettings,
 } from "../api/client";
+import { toCut, toOriginal, type Segments } from "../lib/timeline";
 import { useQueue } from "../stores/queueStore";
 
 // ─── Progress persistence ─────────────────────────────────────────────────────
@@ -24,6 +25,31 @@ export function readProgress(): Record<string, ProgressEntry> {
   try { return JSON.parse(localStorage.getItem(PROGRESS_KEY) || "{}"); } catch { return {}; }
 }
 
+/**
+ * Which file is playing, and how its clock maps to the original.
+ *
+ * Module state rather than context: `writeProgress` is called from an audio
+ * event listener mounted once, and the alternative is threading the mapping
+ * through every save. The player sets it when it swaps the source.
+ */
+let activeSource: AudioSource = "original";
+let activeSegments: Segments | null = null;
+
+export function setActiveSource(source: AudioSource, segments: Segments | null) {
+  activeSource = source;
+  activeSegments = segments;
+}
+
+/** The position to store: always in the original timeline. */
+export function positionInOriginal(time: number): number {
+  return activeSource === "clean" ? toOriginal(activeSegments, time) : time;
+}
+
+/** Where a stored position sits in the file currently playing. */
+export function positionInActiveSource(time: number): number {
+  return activeSource === "clean" ? toCut(activeSegments, time) : time;
+}
+
 function writeProgress(id: string, time: number, dur: number, ep: PlayableEpisode | null) {
   // Bug 6: Use proportional thresholds for short episodes
   // Don't save if nearly finished (within 30s or last 10% for short episodes)
@@ -32,10 +58,11 @@ function writeProgress(id: string, time: number, dur: number, ep: PlayableEpisod
   // Don't save if barely started (under 10s or first 5% for short episodes)
   const startThreshold = dur > 0 ? Math.min(10, dur * 0.05) : 10;
   if (time < startThreshold) return;
+  const originalTime = positionInOriginal(time);
   try {
     const map = readProgress();
     map[id] = {
-      currentTime:   time,
+      currentTime:   originalTime,
       duration:      dur,
       title:         ep?.title,
       podcast_image: ep?.podcast_image,
@@ -44,7 +71,9 @@ function writeProgress(id: string, time: number, dur: number, ep: PlayableEpisod
     };
     localStorage.setItem(PROGRESS_KEY, JSON.stringify(map));
   } catch {}
-  sync(id, { position: time, duration: dur });
+  // Sent as-is with the source named, so the server does the translation with
+  // the mapping it stored — one implementation for everything persisted.
+  sync(id, { position: time, duration: dur, source: activeSource });
 }
 
 /** Forget where you were in an episode, without forgetting you opened it.
@@ -81,7 +110,10 @@ function markPlayed(id: string) {
 
 /** Fire and forget. A failed sync must never interrupt playback — the local
  *  copy already holds the value, and the next save will carry it up. */
-function sync(id: string, body: { position?: number; duration?: number; played?: boolean }) {
+function sync(
+  id: string,
+  body: { position?: number; duration?: number; played?: boolean; source?: AudioSource },
+) {
   putProgress(id, body).catch(() => {});
 }
 
@@ -409,7 +441,9 @@ export function AudioProvider({ children }: { children: ReactNode }) {
       seekTo = podcastSettings.skip_intro;
     }
 
-    // Swap src
+    // Swap src. A fresh episode always starts on its original file; the player
+    // sets the clean source again if this podcast prefers it.
+    setActiveSource("original", null);
     loadedIdRef.current = id;
     setEpisode(resolved);
     setAudioReady(false);

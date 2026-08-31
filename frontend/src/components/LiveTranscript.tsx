@@ -76,13 +76,18 @@ export default function LiveTranscript({
   open,
   onSeek,
   onBookmarked,
+  toOriginal,
 }: {
   episodeId: string;
   audioRef: React.RefObject<HTMLAudioElement | null>;
   open: boolean;
+  /** Seconds in the ORIGINAL timeline; the caller converts for the file playing. */
   onSeek: (seconds: number) => void;
   /** Called after a line is kept, so the player can show a count. */
   onBookmarked?: () => void;
+  /** Maps the playing file's clock onto the transcript's. Identity by default;
+   *  the clean cut runs behind the original by whatever was removed. */
+  toOriginal?: (seconds: number) => number;
 }) {
   const [words, setWords] = useState<TranscriptWord[]>([]);
   const [state, setState] = useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
@@ -163,14 +168,15 @@ export default function LiveTranscript({
     const tick = () => {
       const audio = audioRef.current;
       if (audio) {
-        const i = wordAt(words, audio.currentTime);
+        const at = toOriginal ? toOriginal(audio.currentTime) : audio.currentTime;
+        const i = wordAt(words, at);
         setActive(prev => (prev === i ? prev : i));
       }
       frame.current = requestAnimationFrame(tick);
     };
     frame.current = requestAnimationFrame(tick);
     return () => { if (frame.current) cancelAnimationFrame(frame.current); };
-  }, [open, words, audioRef]);
+  }, [open, words, audioRef, toOriginal]);
 
   // Keep the spoken line centred, unless the reader has taken over the scroll.
   //

@@ -135,7 +135,8 @@ subscription either way.
 - **⚙️ Auto-snips** — the nightly job picks the handful of moments per new episode that would have been worth tapping, and saves them as distills, badged so you know they were suggested rather than chosen. Also available on demand from any transcribed episode via **⚙ Suggest highlights**, which is the only route for YouTube videos and anything older than the job's window. Measured at ~13s for a 12-minute episode.
 - **⚗️ Distill** — tap at any moment while listening. Captures the last 60 seconds of transcript, calls the agent CLI, and returns a verbatim quote and a 1–2 sentence insight (~30s).
 - **🔖 Bookmarks** — the cheap half of the same gesture, and the one you can use six times on a drive. Tap 🔖 in the player and the sentence being spoken is kept verbatim, with its timestamp; no model call, no waiting. Or press and hold any line of the read-along transcript. Bookmarks carry an optional note, show up in the episode's Obsidian export, and are filterable in the feed.
-- **✂️ Ad-free audio** — after transcription, the model classifies ad segments and ffmpeg cuts them out. Stream the clean version from the player.
+- **✂️ The clean cut** — after transcription the model classifies ad segments and ffmpeg cuts them out; where a podcast asks for it, the same pass also shortens long pauses and levels the loudness. Stream it from the player, which says what was removed ("1 ad · 4m 12s of pauses").
+  The cut runs on its own clock, so the spans it keeps are stored as a map back to the original timeline and every timestamp is translated at the edges — see [`backend/services/timeline.py`](backend/services/timeline.py). Without that, a distill or bookmark taken while listening to the cut quoted a passage minutes from the one just heard, the read-along drifted, and chapter jumps landed in the wrong place. Pauses are shortened rather than closed: a beat of each one survives, because speech with every gap removed is exhausting and runs a question into its answer.
 - **📖 Chapters** — the model generates 4–10 named chapters with timestamps from the full transcript. Tap any chapter to jump directly.
 - **💬 Episode chat** — ask questions about any transcribed episode. The model answers using the full transcript as context. History kept per episode (capped at 50 messages). Copy the whole conversation as Markdown or download it as a `.md` file from the chat header.
 - **📺 YouTube videos** — paste a link under Search → **YouTube** and the video joins your library as an ordinary episode: audio you can listen to, a word-level transcript, and every AI feature on top of it. Grouped under its channel, so videos filter and search like any show. See [YouTube videos](#youtube-videos).
@@ -423,7 +424,9 @@ Re-adding a video you already have is a no-op that returns the existing episode.
 | `backend/services/episode_query.py` | The one place episode filters become SQL — feed and smart playlists both |
 | `backend/services/retention.py` | What media costs, and what may be deleted |
 | `backend/services/opml.py` | OPML import/export |
-| `backend/services/ad_detector.py` | Ad classification + ffmpeg audio surgery |
+| `backend/services/ad_detector.py` | Ad classification (the model call) |
+| `backend/services/audio_processor.py` | Silence measurement + the ffmpeg cut, and the map it produces |
+| `backend/services/timeline.py` | Translating between the original audio and the clean cut |
 | `backend/services/chapterizer.py` | Chapter + summary generation |
 | `backend/services/researcher.py` | Multi-turn research pipeline: model + Tavily → HTML report |
 | `backend/services/rss.py` | RSS feed parsing |

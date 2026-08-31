@@ -194,6 +194,7 @@ class TestPodcastSettings:
         assert sub["settings"] == {
             "playback_rate": None, "skip_intro": None, "skip_outro": None,
             "prefer_adfree": None, "auto_transcribe": None,
+            "trim_silence": None, "normalize_volume": None,
         }
 
     async def test_saved_and_read_back(self, client):

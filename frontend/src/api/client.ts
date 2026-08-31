@@ -119,11 +119,14 @@ export const getEpisode = (episodeId: string) =>
 export const audioStreamUrl = (episodeId: string) => `${BASE}/player/audio/${episodeId}`;
 
 // --- Shots ---
-export const createGist = (episodeId: string, currentSeconds: number) =>
-  req<Gist>("POST", `/gists/`, {
-    episode_id: episodeId,
-    current_seconds: currentSeconds,
-  });
+/** `source` says which file the position came from; the server translates. */
+export const createGist = (
+  episodeId: string, currentSeconds: number, source: AudioSource = "original",
+) => req<Gist>("POST", `/gists/`, {
+  episode_id: episodeId,
+  current_seconds: currentSeconds,
+  source,
+});
 
 export const listGists = (episodeId?: string) =>
   req<Gist[]>("GET", episodeId ? `/gists/?episode_id=${episodeId}` : "/gists/");
@@ -215,6 +218,11 @@ export const getResearch = (gistId: string) =>
 export interface AdFreeStatus {
   has_adfree: boolean;
   ads_count: number;
+  /** Kept spans of the original, in seconds — the map between the two clocks.
+   *  See lib/timeline.ts. */
+  segments: number[][] | null;
+  /** What shortening pauses saved, apart from what removing ads saved. */
+  trimmed_seconds: number;
 }
 
 export async function getAdFreeStatus(episodeId: string): Promise<AdFreeStatus> {
@@ -295,8 +303,12 @@ export const getProgress = () =>
 
 export const putProgress = (
   episodeId: string,
-  body: { position?: number; duration?: number; played?: boolean },
+  body: { position?: number; duration?: number; played?: boolean; source?: AudioSource },
 ) => req<{ episode_id: string; updated_at: string }>("PUT", `/player/progress/${episodeId}`, body);
+
+/** Which file a reported position belongs to. Everything stored uses
+ *  "original", so a position read off the clean cut has to say so. */
+export type AudioSource = "original" | "clean";
 
 export const deleteProgress = (episodeId: string) =>
   req("DELETE", `/player/progress/${episodeId}`);
@@ -415,8 +427,9 @@ export const listBookmarks = (episodeId?: string) =>
   req<Bookmark[]>("GET", episodeId ? `/bookmarks?episode_id=${episodeId}` : "/bookmarks");
 
 /** From the player: the server finds the sentence around `seconds`. */
-export const bookmarkMoment = (episodeId: string, seconds: number) =>
-  req<Bookmark>("POST", "/bookmarks", { episode_id: episodeId, seconds });
+export const bookmarkMoment = (
+  episodeId: string, seconds: number, source: AudioSource = "original",
+) => req<Bookmark>("POST", "/bookmarks", { episode_id: episodeId, seconds, source });
 
 /** From a transcript line, which already knows exactly which words it means. */
 export const bookmarkLine = (
@@ -500,6 +513,9 @@ export interface PodcastSettings {
   skip_outro?: number | null;
   prefer_adfree?: boolean | null;
   auto_transcribe?: boolean | null;
+  /** Applied when an episode is next processed; an existing cut is not redone. */
+  trim_silence?: boolean | null;
+  normalize_volume?: boolean | null;
 }
 
 export const setPodcastSettings = (podcastId: string, settings: PodcastSettings) =>

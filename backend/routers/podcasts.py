@@ -88,6 +88,7 @@ async def unsubscribe(podcast_id: str):
 
 _SETTINGS_COLUMNS = (
     "playback_rate", "skip_intro", "skip_outro", "prefer_adfree", "auto_transcribe",
+    "trim_silence", "normalize_volume",
 )
 
 
@@ -105,6 +106,8 @@ def _settings_of(row) -> PodcastSettings:
         skip_outro=data.get("skip_outro"),
         prefer_adfree=None if data.get("prefer_adfree") is None else bool(data["prefer_adfree"]),
         auto_transcribe=None if data.get("auto_transcribe") is None else bool(data["auto_transcribe"]),
+        trim_silence=None if data.get("trim_silence") is None else bool(data["trim_silence"]),
+        normalize_volume=None if data.get("normalize_volume") is None else bool(data["normalize_volume"]),
     )
 
 
@@ -114,6 +117,10 @@ async def set_podcast_settings(podcast_id: str, body: PodcastSettings) -> Podcas
 
     Sent whole, so clearing a field is expressible — a null means "no opinion
     again", which a patch of only-present-fields could not say.
+
+    `trim_silence` and `normalize_volume` change the clean cut rather than the
+    player, so they take effect the next time an episode is processed — the
+    existing cut is not re-encoded.
 
     `auto_transcribe = false` is the one that earns its place beyond taste:
     transcription is the single stage that can cost money or pin a core for
@@ -137,11 +144,14 @@ async def set_podcast_settings(podcast_id: str, body: PodcastSettings) -> Podcas
         await db.execute(
             """UPDATE subscriptions
                   SET playback_rate = ?, skip_intro = ?, skip_outro = ?,
-                      prefer_adfree = ?, auto_transcribe = ?
+                      prefer_adfree = ?, auto_transcribe = ?,
+                      trim_silence = ?, normalize_volume = ?
                 WHERE podcast_id = ?""",
             (rate, body.skip_intro, body.skip_outro,
              None if body.prefer_adfree is None else int(body.prefer_adfree),
              None if body.auto_transcribe is None else int(body.auto_transcribe),
+             None if body.trim_silence is None else int(body.trim_silence),
+             None if body.normalize_volume is None else int(body.normalize_volume),
              podcast_id),
         )
         await db.commit()

@@ -115,7 +115,9 @@ backend/
     episode_query.py   # THE place episode filters become SQL (feed + smart playlists)
     retention.py       # What media costs; what may be deleted
     opml.py            # OPML import/export
-    ad_detector.py     # Ad segment detection
+    ad_detector.py     # Ad segment detection (the model call)
+    audio_processor.py # Silence measurement, the ffmpeg cut, and its mapping
+    timeline.py        # Original <-> clean-cut clock conversion
     chapterizer.py     # Auto-chapter generation
     researcher.py      # Deep research report generation
 frontend/
@@ -158,6 +160,18 @@ scripts/
   is only useful because it is cheap, and in a vault six months later, which of
   the two produced a quote is the difference between standing behind it and
   having to check it.
+- **The clean cut runs on its own clock.** It is a concatenation of the kept
+  spans, so after the first cut it is behind the original by whatever was
+  removed. Everything stored — playback positions, distills, bookmarks,
+  chapters, transcript timings — uses the ORIGINAL timeline, and the conversion
+  happens at the edges: endpoints that accept a position take
+  `source: "original" | "clean"` and convert server-side
+  (`services/timeline.resolve`), while the player converts locally for seeking
+  and read-along (`frontend/src/lib/timeline.ts`, a mirror of the Python).
+  Keep the two implementations in step; `tests/test_timeline.py` is the
+  specification. The stored mapping is also corrected to the audio ffmpeg
+  actually wrote — cutting an MP3 lands on frame boundaries and each concat join
+  pads, which over a couple of hundred shortened pauses would drift by seconds.
 - Retention (`services/retention.py`) is off by default and never touches
   anything queued, part-heard, or (unless asked) unplayed. It deletes audio
   only: the transcript is a thousandth of the size and cannot be re-derived,

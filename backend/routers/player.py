@@ -54,7 +54,8 @@ async def play(req: PlayRequest):
         row = await db.execute_fetchone(
             """SELECT e.downloaded, e.local_path, e.transcript_status, e.podcast_id,
                       s.playback_rate, s.skip_intro, s.skip_outro,
-                      s.prefer_adfree, s.auto_transcribe
+                      s.prefer_adfree, s.auto_transcribe,
+                      s.trim_silence, s.normalize_volume
                  FROM episodes e
                  LEFT JOIN subscriptions s ON s.podcast_id = e.podcast_id
                 WHERE e.id = ?""",
@@ -96,6 +97,8 @@ async def play(req: PlayRequest):
             "skip_outro": row["skip_outro"],
             "prefer_adfree": None if row["prefer_adfree"] is None else bool(row["prefer_adfree"]),
             "auto_transcribe": None if row["auto_transcribe"] is None else bool(row["auto_transcribe"]),
+            "trim_silence": None if row["trim_silence"] is None else bool(row["trim_silence"]),
+            "normalize_volume": None if row["normalize_volume"] is None else bool(row["normalize_volume"]),
         },
     }
 
@@ -226,15 +229,31 @@ async def transcript_status(episode_id: str) -> TranscriptStatus:
 
 @router.get("/adfree-status/{episode_id}")
 async def adfree_status(episode_id: str):
+    """Whether a clean cut exists, and the map back to the original timeline.
+
+    The segments are the important part. The cut runs on its own clock, so a
+    player using it has to translate before seeking to a chapter, following the
+    transcript, or asking for a distill — see services/timeline.py, mirrored in
+    frontend/src/lib/timeline.ts.
+    """
+    from services import timeline
     db = await get_db()
     try:
         row = await db.execute_fetchone(
-            'SELECT adfree_path, ads_detected FROM episodes WHERE id = ?', (episode_id,)
+            'SELECT adfree_path, ads_detected, processed_segments, trimmed_seconds '
+            'FROM episodes WHERE id = ?', (episode_id,)
         )
         if not row:
-            return {'has_adfree': False, 'ads_count': 0}
+            return {'has_adfree': False, 'ads_count': 0, 'segments': None,
+                    'trimmed_seconds': 0}
         has = bool(row['adfree_path']) and Path(row['adfree_path']).exists()
-        return {'has_adfree': has, 'ads_count': row['ads_detected'] or 0}
+        segments = timeline.parse(row['processed_segments']) if has else None
+        return {
+            'has_adfree': has,
+            'ads_count': row['ads_detected'] or 0,
+            'segments': segments,
+            'trimmed_seconds': row['trimmed_seconds'] or 0,
+        }
     finally:
         await db.close()
 
@@ -300,11 +319,32 @@ async def save_progress(episode_id: str, update: ProgressUpdate):
     Only the fields present are written, so the every-few-seconds position
     save cannot clear the finished flag, and marking an episode finished
     cannot rewind it.
+
+    `source: "clean"` says the position came from the ad-free/trimmed file and
+    has to be translated to the original timeline first.
     """
+    position = update.position
+    if position is not None and update.source == "clean":
+        # Everything stored is in the original timeline, which exists whether or
+        # not a cut was ever made. A position read off the clean cut is behind
+        # by whatever was removed before it, so it is translated on the way in
+        # rather than saved on a clock that only one file runs on.
+        from services import timeline
+        db = await get_db()
+        try:
+            row = await db.execute_fetchone(
+                "SELECT processed_segments FROM episodes WHERE id = ?", (episode_id,)
+            )
+        finally:
+            await db.close()
+        position = timeline.to_original(
+            timeline.parse(row["processed_segments"]) if row else None, position
+        )
+
     sets, params = [], []
-    if update.position is not None:
+    if position is not None:
         sets.append("position = ?")
-        params.append(max(0.0, update.position))
+        params.append(max(0.0, position))
     if update.duration is not None:
         sets.append("duration = ?")
         params.append(max(0.0, update.duration))
@@ -323,7 +363,7 @@ async def save_progress(episode_id: str, update: ProgressUpdate):
                 ON CONFLICT(episode_id) DO UPDATE SET
                   {", ".join(sets)}, updated_at = excluded.updated_at""",
             (episode_id,
-             max(0.0, update.position or 0.0),
+             max(0.0, position or 0.0),
              update.duration,
              1 if update.played else 0,
              now,

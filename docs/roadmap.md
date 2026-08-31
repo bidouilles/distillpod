@@ -70,9 +70,12 @@ Obsidian note and the export alongside distills.
 Absent from `FullscreenPlayer.tsx` (only speed and skip exist). Table stakes for
 bedtime listening; end-of-episode + 15/30/45 min, fade out.
 
-### 1.4 Silence trimming and volume normalization · S
-_Not shipped. Still the cheapest remaining win: the ffmpeg pass and the
-per-podcast settings row it would hang off both exist now._
+### 1.4 Silence trimming and volume normalization · S — ✅ Shipped
+_Shipped 2026-08-31, per-podcast. Doing it properly first required fixing a
+pre-existing bug it would have multiplied: the ad-free cut was never mapped back
+to the original timeline, so every timestamp feature was silently wrong on it.
+The cut now stores the spans it keeps, and positions are translated at the
+edges._
 
 ffmpeg is already a hard dependency for ad-free audio, and `ad_detector.py`
 already rewrites the file. Add `silenceremove` and `loudnorm` as a second pass,
@@ -264,9 +267,7 @@ rest of Tier 1 and Tier 2. The ranking for what follows:
 1. **3.1 ask-my-library** — the flagship, and the one feature none of the three
    commercial apps can match on your own archive. Retrieval can start with the
    keyword search that already exists.
-2. **1.4 silence trim + loudnorm** — hours of listening time for an evening's
-   work, and both the ffmpeg pass and the per-podcast settings row now exist.
-3. **3.4 entity/topic index** — the note builder already extracts `mentioned`
+2. **3.4 entity/topic index** — the note builder already extracts `mentioned`
    on every export; persisting those rows turns them into "every book mentioned
    across my library".
 

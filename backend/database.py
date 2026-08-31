@@ -256,6 +256,15 @@ async def init_db():
             'ALTER TABLE subscriptions ADD COLUMN skip_outro INTEGER',
             'ALTER TABLE subscriptions ADD COLUMN prefer_adfree INTEGER',
             'ALTER TABLE subscriptions ADD COLUMN auto_transcribe INTEGER',
+            'ALTER TABLE subscriptions ADD COLUMN trim_silence INTEGER',
+            'ALTER TABLE subscriptions ADD COLUMN normalize_volume INTEGER',
+            # The spans of the original that the clean cut keeps. Stored rather
+            # than thrown away after the encode because it is the map between
+            # two clocks: without it every timestamp — distills, bookmarks,
+            # chapters, the read-along — is wrong by however much was removed
+            # before that point. See services/timeline.py.
+            'ALTER TABLE episodes ADD COLUMN processed_segments TEXT',
+            'ALTER TABLE episodes ADD COLUMN trimmed_seconds REAL',
         ]:
             try:
                 await db.execute(alter)

@@ -29,6 +29,9 @@ class Episode(BaseModel):
     transcript_status: str = "none"   # none | queued | processing | done | error
     adfree_path: Optional[str] = None
     ads_detected: Optional[int] = None
+    # JSON keep-list mapping the clean cut back onto the original timeline.
+    processed_segments: Optional[str] = None
+    trimmed_seconds: Optional[float] = None
     summary: Optional[str] = None
     chapters_status: str = "none"  # none | processing | done | error
 
@@ -51,8 +54,10 @@ class PodcastSettings(BaseModel):
     playback_rate: Optional[float] = None      # 0.5 – 3.0
     skip_intro: Optional[int] = None           # seconds skipped at the start
     skip_outro: Optional[int] = None           # seconds treated as the end
-    prefer_adfree: Optional[bool] = None       # open the ad-free cut by default
+    prefer_adfree: Optional[bool] = None       # open the clean cut by default
     auto_transcribe: Optional[bool] = None     # False = never transcribe this show
+    trim_silence: Optional[bool] = None        # shorten long pauses
+    normalize_volume: Optional[bool] = None    # level the loudness (needs a re-encode)
 
 
 class Subscription(BaseModel):
@@ -103,6 +108,7 @@ class Gist(BaseModel):
 class GistRequest(BaseModel):
     episode_id: str
     current_seconds: float        # playback position when user tapped Gist
+    source: str = "original"      # original | clean — which file that position is in
 
 
 class PlayRequest(BaseModel):
@@ -120,6 +126,10 @@ class ProgressUpdate(BaseModel):
     position: Optional[float] = None
     duration: Optional[float] = None
     played: Optional[bool] = None
+    # Which file the position came from. Positions are stored in the original
+    # timeline, which exists whether or not a cut was ever made, so a position
+    # read off the clean cut has to say so to be translated.
+    source: str = "original"                   # original | clean
 
 
 class Bookmark(BaseModel):
@@ -138,7 +148,7 @@ class Bookmark(BaseModel):
     podcast_image: Optional[str] = None
 
 
-class BookmarkRequest(BaseModel):
+class BookmarkRequest(BaseModel):  # noqa: D101 — documented below
     """Either a moment (`seconds`) or an explicit span from the transcript.
 
     Tapping "bookmark" in the player knows only where playback is, so the
@@ -151,6 +161,9 @@ class BookmarkRequest(BaseModel):
     end_seconds: Optional[float] = None
     text: Optional[str] = None
     note: Optional[str] = None
+    # Only meaningful with `seconds`: a span taken from the transcript is
+    # already in the original timeline.
+    source: str = "original"      # original | clean
 
 
 class BookmarkNote(BaseModel):
