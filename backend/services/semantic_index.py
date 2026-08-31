@@ -284,20 +284,17 @@ async def search(db, query: str, limit: int = 12) -> list[dict]:
 
     # A model change leaves vectors of a different width behind. They are
     # dropped before anything is compared: mixing widths is meaningless, and
-    # numpy will not even build the matrix.
-    width = len(q)
-    usable: list[tuple[list[float], object]] = []
-    for row in rows:
-        vector = embeddings.unpack(row["vector"])
-        if len(vector) == width:
-            usable.append((vector, row))
+    # numpy will not even build the matrix. Compared as raw bytes — a blob is
+    # four bytes a dimension, so the width is known without unpacking, and
+    # unpacking every row into Python floats is what would actually cost.
+    expected_bytes = len(q) * 4
+    usable = [row for row in rows if len(row["vector"]) == expected_bytes]
     if not usable:
         return []
 
-    scores = embeddings.similarity(q, [vector for vector, _ in usable])
+    scores = embeddings.similarity_from_blobs(q, [row["vector"] for row in usable])
     scored = sorted(
-        ((score, row) for score, (_, row) in zip(scores, usable)),
-        key=lambda pair: pair[0], reverse=True,
+        zip(scores, usable), key=lambda pair: pair[0], reverse=True,
     )
 
     return [

@@ -391,3 +391,39 @@ class TestOptIn:
             await db.close()
         await semantic_index.run(require_opt_in=True)     # unattended, now allowed
         assert (await semantic_index.coverage())["indexed"] == 3
+
+
+class TestSearchCost:
+    """Unpacking every stored vector into Python floats costs more than the
+    arithmetic: a 1024-dimension row becomes ~8KB of objects, so a few thousand
+    windows would turn 12MB of blobs into hundreds of megabytes per question."""
+
+    def test_blob_comparison_matches_unpacked_comparison(self):
+        vectors = [embeddings.normalise([1.0, 2.0, 3.0]),
+                   embeddings.normalise([3.0, 2.0, 1.0])]
+        blobs = [embeddings.pack(v) for v in vectors]
+        query = embeddings.normalise([1.0, 1.0, 1.0])
+        assert embeddings.similarity_from_blobs(query, blobs) == pytest.approx(
+            embeddings.similarity(query, vectors), abs=1e-6)
+
+    def test_no_blobs_no_scores(self):
+        assert embeddings.similarity_from_blobs([1.0], []) == []
+
+    def test_the_pure_python_path_agrees_with_numpy(self, monkeypatch):
+        """The production venv is deliberately slim and has no numpy."""
+        vectors = [embeddings.normalise([0.2, 0.9, 0.1]),
+                   embeddings.normalise([0.8, 0.1, 0.5])]
+        blobs = [embeddings.pack(v) for v in vectors]
+        query = embeddings.normalise([0.5, 0.5, 0.5])
+        with_numpy = embeddings.similarity_from_blobs(query, blobs)
+
+        real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __import__
+
+        def no_numpy(name, *args, **kwargs):
+            if name == "numpy":
+                raise ImportError("no numpy on this box")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.__import__", no_numpy)
+        without_numpy = embeddings.similarity_from_blobs(query, blobs)
+        assert without_numpy == pytest.approx(with_numpy, abs=1e-6)

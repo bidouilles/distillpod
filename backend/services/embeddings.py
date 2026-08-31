@@ -148,3 +148,27 @@ def similarity(query: list[float], vectors: list[list[float]]) -> list[float]:
         return (matrix @ q).tolist()
     except ImportError:
         return [sum(a * b for a, b in zip(vec, query)) for vec in vectors]
+
+
+def similarity_from_blobs(query: list[float], blobs: list[bytes]) -> list[float]:
+    """The same, straight from stored bytes.
+
+    Unpacking first costs more than the arithmetic does: a 1024-dimension vector
+    becomes a list of 1024 Python floats at ~8KB a row, so a few thousand windows
+    turn 12MB of blobs into hundreds of megabytes of objects on every question.
+    numpy reads the buffer as it stands, and the pure-Python path unpacks one row
+    at a time so only one is ever resident.
+    """
+    if not blobs:
+        return []
+    width = len(query)
+    try:
+        import numpy as np
+        matrix = np.frombuffer(b"".join(blobs), dtype="<f4").reshape(len(blobs), width)
+        return (matrix @ np.asarray(query, dtype="float32")).tolist()
+    except ImportError:
+        out = []
+        for blob in blobs:
+            vec = unpack(blob)
+            out.append(sum(a * b for a, b in zip(vec, query)))
+        return out

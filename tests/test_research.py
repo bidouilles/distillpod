@@ -319,3 +319,77 @@ class TestHappyPath:
         written = (tmp_path / "res-5.html").read_text()
         assert "Contested" in written and "example.com/a" in written
         assert "Contested" in notify.said
+
+
+class TestSourceQuality:
+    """From the first real report: five of thirteen sources were variations of
+    the same npm documentation page, because the model wrote `site:`-scoped
+    queries."""
+
+    async def test_one_domain_cannot_fill_the_source_list(self, with_key, monkeypatch):
+        pages = [
+            {"url": f"https://docs.npmjs.com/page-{i}", "title": f"npm docs {i}",
+             "content": "scripts"} for i in range(6)
+        ]
+        other = [{"url": "https://blog.rust-lang.org/advisory",
+                  "title": "Advisory", "content": "what happened"}]
+
+        class FakeResponse:
+            def __init__(self, results):
+                self._results = results
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"results": self._results}
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def post(self, url, json=None):
+                return FakeResponse(pages if "npm" in json["query"] else other)
+
+        monkeypatch.setattr(researcher.httpx, "AsyncClient", lambda **kw: FakeClient())
+        sources = await researcher.search_web(["npm postinstall", "rust advisory"])
+        from collections import Counter
+        by_domain = Counter(s["url"].split("/")[2] for s in sources)
+        assert by_domain["docs.npmjs.com"] <= researcher.MAX_PER_DOMAIN
+        assert "blog.rust-lang.org" in by_domain, "the cap starved the other domains"
+
+    async def test_a_search_that_fails_does_not_lose_the_others(self, with_key, monkeypatch):
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def post(self, url, json=None):
+                if json["query"] == "boom":
+                    raise RuntimeError("network")
+
+                class R:
+                    def raise_for_status(self): pass
+                    def json(self): return {"results": [
+                        {"url": "https://ok.example/1", "title": "Fine", "content": "x"}]}
+                return R()
+
+        monkeypatch.setattr(researcher.httpx, "AsyncClient", lambda **kw: FakeClient())
+        sources = await researcher.search_web(["boom", "fine"])
+        assert [s["url"] for s in sources] == ["https://ok.example/1"]
+
+    def test_a_long_transcript_quote_is_trimmed_not_dumped(self):
+        long_quote = " ".join(["word"] * 300)
+        html = researcher.build_html(
+            claim="c",
+            report={"verdict": "mixed", "verdict_note": "n", "sections": [],
+                    "open_questions": []},
+            sources=SOURCES, echoes=[], episode={"title": "Ep"},
+            gist={"text": long_quote}, queries=[])
+        assert "…" in html
+        assert html.count("word") < 200

@@ -81,6 +81,10 @@ REPORT_SCHEMA = {
 TAVILY_URL = "https://api.tavily.com/search"
 MAX_QUERIES = 4
 RESULTS_PER_QUERY = 5
+# One site rarely has more than a couple of pages worth reading on a claim, and
+# a `site:`-scoped query returns five variations of the same documentation. A cap
+# keeps the source list something a person would actually scan.
+MAX_PER_DOMAIN = 3
 # Enough of a source for the model to reason about; short enough that a dozen
 # of them still fit in one call.
 SOURCE_CHARS = 1200
@@ -194,7 +198,9 @@ async def plan(premise: str) -> tuple[str, list[str]]:
         "- \"queries\": 2 to 4 web searches that would establish whether it "
         "holds up. Concrete and specific: name the people, companies, papers or "
         "events involved. No years unless the moment named one, and no words "
-        "like \"research\" or \"analysis\" padding them out.\n\n"
+        "like \"research\" or \"analysis\" padding them out. No search "
+        "operators — a site: query comes back as five pages of the same "
+        "documentation.\n\n"
         "If the moment is too vague to check, say so in \"claim\" and make the "
         "queries about the episode's actual subject instead."
     )
@@ -213,6 +219,7 @@ async def search_web(queries: list[str]) -> list[dict]:
     caller counts what came back and refuses to write a report from nothing.
     """
     sources: dict[str, dict] = {}
+    per_domain: dict[str, int] = {}
     async with httpx.AsyncClient(timeout=30) as client:
         for query in queries:
             try:
@@ -231,6 +238,10 @@ async def search_web(queries: list[str]) -> list[dict]:
                 url = (result.get("url") or "").strip()
                 if not url or url in sources:
                     continue
+                domain = url.split("/")[2] if "//" in url else url
+                if per_domain.get(domain, 0) >= MAX_PER_DOMAIN:
+                    continue
+                per_domain[domain] = per_domain.get(domain, 0) + 1
                 sources[url] = {
                     "url": url,
                     "title": (result.get("title") or url)[:200],
@@ -349,6 +360,8 @@ def build_html(*, claim: str, report: dict, sources: list[dict], echoes: list[di
         )
 
     quote = (gist.get("text") or "").strip()
+    if len(quote) > 420:
+        quote = quote[:420].rsplit(" ", 1)[0] + " …"
     generated_at = datetime.now().strftime("%B %d, %Y at %H:%M")
 
     return f"""<!DOCTYPE html>
