@@ -347,3 +347,75 @@ class TestNesting:
 
         await asyncio.gather(outer(), other())
         assert order == ["outer in", "nested", "outer out", "other"]
+
+
+class TestDeduplication:
+    """Pressing play from a second browser while the first download runs must
+    not queue the same work again."""
+
+    async def test_the_same_key_runs_once(self):
+        runs: list[str] = []
+
+        async def work(who):
+            async with jobs.lane("media", label=who, key="download:ep-1") as turn:
+                if turn.duplicate:
+                    return "waited"
+                runs.append(who)
+                await asyncio.sleep(0.05)
+                return "did it"
+
+        first, second = await asyncio.gather(work("browser-a"), work("browser-b"))
+        assert runs == ["browser-a"], f"ran twice: {runs}"
+        assert first == "did it" and second == "waited"
+
+    async def test_the_duplicate_waits_for_the_original(self):
+        """It must not return before the work is there — the caller's next act
+        is usually to read what the first turn produced."""
+        finished_at = {}
+
+        async def original():
+            async with jobs.lane("media", label="a", key="k"):
+                await asyncio.sleep(0.08)
+                finished_at["original"] = asyncio.get_event_loop().time()
+
+        async def duplicate():
+            await asyncio.sleep(0.01)
+            async with jobs.lane("media", label="b", key="k") as turn:
+                assert turn.duplicate
+                finished_at["duplicate"] = asyncio.get_event_loop().time()
+
+        await asyncio.gather(original(), duplicate())
+        assert finished_at["duplicate"] >= finished_at["original"]
+
+    async def test_a_failed_turn_releases_its_key(self):
+        """Otherwise everyone who asked for it waits on work that has stopped."""
+        async def failing():
+            async with jobs.lane("stt", label="bad", key="k2"):
+                raise RuntimeError("no")
+
+        with pytest.raises(RuntimeError):
+            await failing()
+        assert jobs.in_flight() == []
+
+        ran = []
+        async with jobs.lane("stt", label="retry", key="k2") as turn:
+            assert not turn.duplicate
+            ran.append(True)
+        assert ran == [True]
+
+    async def test_different_keys_are_different_work(self):
+        runs: list[str] = []
+
+        async def work(key):
+            async with jobs.lane("media", label=key, key=key) as turn:
+                if not turn.duplicate:
+                    runs.append(key)
+
+        await asyncio.gather(work("download:ep-1"), work("download:ep-2"))
+        assert sorted(runs) == ["download:ep-1", "download:ep-2"]
+
+    async def test_a_key_is_free_again_once_the_work_is_done(self):
+        async with jobs.lane("media", label="first", key="k3") as turn:
+            assert not turn.duplicate
+        async with jobs.lane("media", label="second", key="k3") as turn:
+            assert not turn.duplicate, "a finished job still blocked the next one"

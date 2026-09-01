@@ -177,6 +177,12 @@ scripts/
   file per lane, which is why `set_lock_dir` is called both at app startup and
   at the top of `scripts/daily-sync.py`. Adding a new yt-dlp or model call means
   wrapping it in `async with jobs.lane(...)`, not adding another `create_task`.
+  Lanes are reentrant per task — nesting is natural (fetching captions is one
+  turn whose helper takes the same lane) and would otherwise deadlock — and
+  `key=` deduplicates: two browsers pressing play on one episode produce one
+  download, with the second caller waiting and then told `turn.duplicate`. The
+  in-memory guards in `player.py` cannot see across processes, so the nightly
+  script also skips episodes already `processing` or `queued`.
 - **A YouTube episode tries its own captions before speech-to-text.** They carry
   word-level timings, cost nothing and arrive in seconds. The ingest path always
   did this; the play path did not, so any video the nightly caption pass had not

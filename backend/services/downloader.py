@@ -52,13 +52,20 @@ async def download_episode(episode_id: str, audio_url: str) -> Path:
                 # One podcast download at a time. Three at once share the line
                 # and all finish later; the person waiting to play wants the
                 # first one done, not all three eventually.
-                async with jobs.lane("media", label=f"download: {episode_id}"):
-                    async with httpx.AsyncClient(follow_redirects=True, timeout=300) as client:
-                        async with client.stream("GET", audio_url) as r:
-                            r.raise_for_status()
-                            with open(part, "wb") as f:
-                                async for chunk in r.aiter_bytes(chunk_size=65536):
-                                    f.write(chunk)
+                # Keyed, so a second browser pressing play on the same episode
+                # waits for this download rather than queueing another.
+                async with jobs.lane("media", label=f"download: {episode_id}",
+                                     key=f"download:{episode_id}") as turn:
+                    if turn.duplicate:
+                        if dest.exists():
+                            return dest
+                    else:
+                        async with httpx.AsyncClient(follow_redirects=True, timeout=300) as client:
+                            async with client.stream("GET", audio_url) as r:
+                                r.raise_for_status()
+                                with open(part, "wb") as f:
+                                    async for chunk in r.aiter_bytes(chunk_size=65536):
+                                        f.write(chunk)
             part.replace(dest)
         finally:
             part.unlink(missing_ok=True)

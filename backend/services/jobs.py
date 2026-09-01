@@ -109,7 +109,21 @@ class _Lane:
     done: int = 0
 
 
+@dataclass
+class Turn:
+    """Handed to the body of a turn.
+
+    `duplicate` says the same work was already in flight when this one asked —
+    two browsers pressing play on the same episode, say. The waiting is done
+    either way, so by the time a duplicate turn runs, the work it wanted has
+    already happened and its body should do nothing.
+    """
+    duplicate: bool = False
+
+
 _lanes: dict[str, _Lane] = {}
+# Work in flight by key, so the same job asked for twice is done once.
+_in_flight: dict[str, asyncio.Event] = {}
 _lock_dir: Path | None = None
 
 
@@ -194,23 +208,39 @@ def priority_scope(level: int):
 
 
 @contextlib.asynccontextmanager
-async def lane(name: str, label: str = "", level: int | None = None):
+async def lane(name: str, label: str = "", level: int | None = None, key: str | None = None):
     """Take a turn in `name`, waiting for whoever is ahead.
 
     Ordering among waiters is by priority, then by arrival: a listener's play
     overtakes the nightly backlog, but two jobs of equal standing keep their
     order rather than starving each other.
+
+    `key` deduplicates. Pressing play from a second browser while the first
+    download runs should not queue the same download again — with a key, the
+    second caller waits for the first to finish and is then told it was a
+    duplicate, so its body can skip work that has already been done.
     """
+    if key is not None:
+        existing = _in_flight.get(key)
+        if existing is not None:
+            await existing.wait()
+            yield Turn(duplicate=True)
+            return
     already = _held_by_task.get()
     if name in already:
         # Already inside a turn in this lane: nesting is not a second turn.
-        yield
+        yield Turn()
         return
 
     this = _lane(name)
     level = priority() if level is None else level
     waiter = _Waiter(priority=level, sequence=next(_counter), label=label or name)
     this.waiting.append(waiter)
+
+    done_marker: asyncio.Event | None = None
+    if key is not None:
+        done_marker = asyncio.Event()
+        _in_flight[key] = done_marker
 
     try:
         while True:
@@ -235,7 +265,7 @@ async def lane(name: str, label: str = "", level: int | None = None):
             # The cross-process lock is taken in a thread: flock blocks, and
             # blocking the event loop would stall every request in the app.
             await asyncio.get_event_loop().run_in_executor(None, _enter_lock, name)
-            yield
+            yield Turn()
         finally:
             _held_by_task.reset(held_token)
             await asyncio.get_event_loop().run_in_executor(None, _exit_lock, name)
@@ -248,6 +278,11 @@ async def lane(name: str, label: str = "", level: int | None = None):
         if waiter in this.waiting:
             this.waiting.remove(waiter)
             _wake(this)
+        if done_marker is not None:
+            # Release anyone who asked for the same work, whether this turn
+            # succeeded or raised: they must not wait on a job that has stopped.
+            _in_flight.pop(key, None)
+            done_marker.set()
 
 
 # The cross-process lock is a context manager, but it has to be entered and left
@@ -305,6 +340,11 @@ def waiting_for(name: str) -> int:
     return len(_lane(name).waiting)
 
 
+def in_flight() -> list[str]:
+    """Keys currently being worked on, for tests and diagnostics."""
+    return sorted(_in_flight)
+
+
 def reset() -> None:
     """Forget every lane, releasing anything still held. Tests only.
 
@@ -316,3 +356,6 @@ def reset() -> None:
         _exit_lock(name)
     _lanes.clear()
     _held.clear()
+    for event in _in_flight.values():
+        event.set()
+    _in_flight.clear()

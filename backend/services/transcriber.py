@@ -122,10 +122,34 @@ async def _obtain_words(episode_id: str, audio_path: Path) -> tuple[list[dict], 
             log.info("%s: caption fetch failed (%s), falling back to speech-to-text",
                      episode_id, exc)
 
-    async with jobs.lane("stt", label=f"transcribe: {episode_id}"):
+    # Keyed: the same episode asked for twice is transcribed once. That matters
+    # more here than anywhere else — a duplicate is a second bill.
+    async with jobs.lane("stt", label=f"transcribe: {episode_id}",
+                         key=f"stt:{episode_id}") as turn:
+        if turn.duplicate:
+            stored = await _stored_words(episode_id)
+            if stored:
+                return stored, ""
         loop = asyncio.get_event_loop()
         # Off the event loop: CPU-bound for whisper, a long HTTP call for voxtral
         return await loop.run_in_executor(None, stt.transcribe, str(audio_path)), ""
+
+
+async def _stored_words(episode_id: str) -> list[dict]:
+    """Whatever another turn just stored for this episode, if anything."""
+    db = await get_db()
+    try:
+        row = await db.execute_fetchone(
+            "SELECT words_json FROM transcripts WHERE episode_id = ?", (episode_id,)
+        )
+    finally:
+        await db.close()
+    if not row:
+        return []
+    try:
+        return json.loads(row["words_json"])
+    except (TypeError, ValueError):
+        return []
 
 
 def _video_url(episode_id: str) -> str:

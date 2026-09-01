@@ -569,6 +569,11 @@ per resource rather than running at once:
 | `llm` | the agent CLI | two of those on a two-core box is neither |
 | `web` | search and embeddings | pacing |
 
+The same work asked for twice is done once: pressing play from a second browser
+while the first download runs waits for that download rather than starting
+another, and the nightly job leaves alone anything the app is already
+transcribing.
+
 Lanes are independent, so fetching audio never waits on a transcription. Within
 a lane, work someone is waiting on goes first: pressing play overtakes the
 nightly backlog, and the turn already in progress is the only thing it waits

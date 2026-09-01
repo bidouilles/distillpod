@@ -183,6 +183,13 @@ async def process_subscription(podcast_id: str, feed_url: str, title: str) -> di
                 transcript_status = row["transcript_status"]
 
             # Skip if already transcribed
+            if transcript_status in ("processing", "queued"):
+                # The app is on it — a listener pressed play. Transcribing it
+                # again from here would be a second bill for the same audio,
+                # and the in-memory guards cannot see across processes.
+                log.info(f"  ⏭  Already being transcribed elsewhere: {ep.title[:60]}")
+                continue
+
             if transcript_status == "done":
                 stats["skipped"] += 1
                 continue

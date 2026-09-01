@@ -540,5 +540,10 @@ def _download_audio_blocking(url: str, dest: Path) -> Path:
 
 
 async def download_audio(url: str, dest: Path) -> Path:
-    async with jobs.lane("youtube", label="download audio"):
+    # Keyed on the destination: two listeners asking for the same video get one
+    # download, not two turns fetching the same bytes.
+    async with jobs.lane("youtube", label=f"download: {dest.stem}",
+                         key=f"ytdl:{dest}") as turn:
+        if turn.duplicate and dest.exists():
+            return dest
         return await asyncio.to_thread(_download_audio_blocking, url, dest)
