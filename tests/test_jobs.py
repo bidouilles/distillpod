@@ -301,3 +301,49 @@ class TestLockRobustness:
 
         fcntl.flock(stuck, fcntl.LOCK_UN)
         stuck.close()
+
+
+class TestNesting:
+    """Taking a lane twice from the same task is a deadlock: the inner turn
+    waits for an outer one that cannot finish until the inner one does. It is
+    also natural here — fetching captions is one labelled turn whose helper
+    takes the same lane on its own behalf — so re-entry has to be a no-op."""
+
+    async def test_a_nested_turn_does_not_wait_for_itself(self):
+        async def outer():
+            async with jobs.lane("youtube", label="captions: ep-1"):
+                async with jobs.lane("youtube", label="video metadata"):
+                    return "reached"
+
+        assert await asyncio.wait_for(outer(), timeout=2) == "reached"
+
+    async def test_the_lane_is_free_again_afterwards(self):
+        async def outer():
+            async with jobs.lane("youtube", label="outer"):
+                async with jobs.lane("youtube", label="inner"):
+                    pass
+
+        await asyncio.wait_for(outer(), timeout=2)
+        log: list[str] = []
+        await asyncio.wait_for(hold("youtube", "next", log), timeout=2)
+        assert log == ["start next", "end next"]
+
+    async def test_a_different_task_still_waits(self):
+        """Re-entry is per task, not a free pass for everyone."""
+        order: list[str] = []
+
+        async def outer():
+            async with jobs.lane("youtube", label="outer"):
+                order.append("outer in")
+                await asyncio.sleep(0.08)
+                async with jobs.lane("youtube", label="nested"):
+                    order.append("nested")
+                order.append("outer out")
+
+        async def other():
+            await asyncio.sleep(0.01)
+            async with jobs.lane("youtube", label="other"):
+                order.append("other")
+
+        await asyncio.gather(outer(), other())
+        assert order == ["outer in", "nested", "outer out", "other"]

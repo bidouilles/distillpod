@@ -76,6 +76,15 @@ LOCK_WAIT_CEILING = 120.0
 # wrong in that direction only makes housekeeping wait.
 _priority: contextvars.ContextVar[int] = contextvars.ContextVar("job_priority", default=BACKGROUND)
 
+# Lanes this task already holds. Taking a lane twice from the same task is a
+# deadlock — the inner turn waits for an outer one that cannot finish until the
+# inner one does — and nesting is natural here: fetching captions is one
+# labelled turn that internally calls the metadata helper, which takes the same
+# lane on its own behalf. So a re-entry is a no-op rather than a wait.
+_held_by_task: contextvars.ContextVar[frozenset] = contextvars.ContextVar(
+    "held_lanes", default=frozenset()
+)
+
 _counter = itertools.count()
 
 
@@ -192,6 +201,12 @@ async def lane(name: str, label: str = "", level: int | None = None):
     overtakes the nightly backlog, but two jobs of equal standing keep their
     order rather than starving each other.
     """
+    already = _held_by_task.get()
+    if name in already:
+        # Already inside a turn in this lane: nesting is not a second turn.
+        yield
+        return
+
     this = _lane(name)
     level = priority() if level is None else level
     waiter = _Waiter(priority=level, sequence=next(_counter), label=label or name)
@@ -215,12 +230,14 @@ async def lane(name: str, label: str = "", level: int | None = None):
         this.current = waiter.label
         this.current_since = time.time()
         this.current_priority = level
+        held_token = _held_by_task.set(already | {name})
         try:
             # The cross-process lock is taken in a thread: flock blocks, and
             # blocking the event loop would stall every request in the app.
             await asyncio.get_event_loop().run_in_executor(None, _enter_lock, name)
             yield
         finally:
+            _held_by_task.reset(held_token)
             await asyncio.get_event_loop().run_in_executor(None, _exit_lock, name)
             this.busy = False
             this.current = None
