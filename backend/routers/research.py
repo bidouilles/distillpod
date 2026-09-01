@@ -1,11 +1,15 @@
-import uuid
 import asyncio
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
+from fastapi.responses import FileResponse
+
+from config import settings
 from database import get_db
-from services import researcher
+from services import researcher, typeset
 
 router = APIRouter(prefix="/research", tags=["research"])
 
@@ -113,19 +117,76 @@ async def research_markdown(gist_id: str):
     return {"gist_id": gist_id, "markdown": markdown, "url": row["public_url"]}
 
 
+@router.get("/{gist_id}/pdf")
+async def research_pdf(gist_id: str):
+    """The report typeset as a briefing note.
+
+    Compiled once and kept beside the HTML: the same report asked for twice
+    should not run the typesetter twice. Missing binary, or a report stored
+    before the structure was kept, is a refusal with a reason rather than a
+    blank page.
+    """
+    import json as _json
+
+    db = await get_db()
+    try:
+        row = await (
+            await db.execute(
+                "SELECT id, status, report_json FROM researches "
+                "WHERE gist_id = ? ORDER BY created_at DESC LIMIT 1",
+                (gist_id,),
+            )
+        ).fetchone()
+    finally:
+        await db.close()
+
+    if not row or row["status"] != "done":
+        raise HTTPException(404, "No finished report for this distillation")
+    if not typeset.available():
+        raise HTTPException(409, "Typesetting needs the typst binary on the server.")
+    if not row["report_json"]:
+        raise HTTPException(
+            409, "This report predates PDF export — run it again to typeset it.")
+
+    path = Path(settings.reports_dir) / f"{row['id']}.pdf"
+    if not path.exists():
+        try:
+            data = _json.loads(row["report_json"])
+        except ValueError:
+            raise HTTPException(500, "The stored report could not be read")
+        # Typesetting is CPU work; it queues with the other media work rather
+        # than competing with an encode or a download.
+        from services import jobs
+        async with jobs.lane("media", label=f"typeset: {row['id'][:8]}"):
+            rendered = await asyncio.to_thread(typeset.render, data, path)
+        if not rendered:
+            raise HTTPException(502, "The report could not be typeset")
+
+    stem = "".join(c if c.isalnum() or c in "-_" else "-"
+                   for c in (gist_id[:8] + "-research"))
+    return FileResponse(str(path), media_type="application/pdf",
+                        filename=f"{stem}.pdf")
+
+
 @router.get("/{gist_id}")
 async def get_research(gist_id: str):
     db = await get_db()
     try:
         row = await (
             await db.execute(
-                "SELECT id, status, public_url, error, created_at, finished_at "
+                "SELECT id, status, public_url, error, created_at, finished_at, "
+                "       report_json "
                 "FROM researches WHERE gist_id = ? ORDER BY created_at DESC LIMIT 1",
                 (gist_id,),
             )
         ).fetchone()
         if not row:
             return {"status": "none"}
-        return dict(row)
+        record = dict(row)
+        # Whether the extra renderings can be offered at all, so the card does
+        # not show a button that can only fail.
+        record["markdown"] = bool(record.pop("report_json", None))
+        record["pdf"] = record["markdown"] and typeset.available()
+        return record
     finally:
         await db.close()

@@ -121,6 +121,7 @@ backend/
     timeline.py        # Original <-> clean-cut clock conversion
     jobs.py            # Turn-taking lanes: one job at a time per resource
     librarian.py       # Plan searches -> retrieve passages -> answer with citations
+    typeset.py         # report_json -> Typst -> PDF (optional; degrades to Markdown)
     embeddings.py      # Text -> vectors (mistral | local | off), normalised here
     semantic_index.py  # Transcript windows + vector search feeding the librarian
     chapterizer.py     # Auto-chapter generation
@@ -191,7 +192,10 @@ scripts/
 - **A report is data first, a page second.** `researches.report_json` holds the
   claim, verdict, sections, sources and echoes; the HTML and the Markdown are
   both renderers over it. Anything else — a typeset PDF — should be a third
-  renderer, never a scrape of the HTML. Reports made before that column exists
+  renderer, never a scrape of the HTML — which is what `services/typeset.py` is.
+  Its Typst template reads `report.json` and interpolates strings, so transcript
+  quotes and page titles containing `#`, `[` or `*` are inserted as text rather
+  than parsed as markup; there is a test that fires all of those at it. Reports made before that column exists
   can only be viewed, and the endpoint says so instead of half-recovering them.
 - **The library cross-reference demands corroboration.** It asked with the claim
   as one keyword query, and `fts_any_query` ORs prefix-matched tokens — so a

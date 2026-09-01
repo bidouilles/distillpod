@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { listGists, deleteGist, getSubscriptions, triggerResearch, getResearch, getResearchMarkdown, Gist, Subscription, Research } from "../api/client";
+import { listGists, deleteGist, getSubscriptions, triggerResearch, getResearch, getResearchMarkdown, researchPdfUrl, Gist, Subscription, Research } from "../api/client";
 import { CopyButton, ShareButton, DownloadIcon } from "../components/ActionButtons";
 import { downloadText, slugify } from "../lib/clipboard";
 
@@ -31,8 +31,9 @@ function parseGistSummary(summary: string | undefined): { quote?: string; insigh
  * to be selected out of a browser tab. Markdown is fetched on demand — it is
  * rendered from the stored structure, and most reports are never exported.
  */
-function ResearchActions({ gistId, url, title }: {
+function ResearchActions({ gistId, url, title, canExport, canTypeset }: {
   gistId: string; url: string; title?: string;
+  canExport?: boolean; canTypeset?: boolean;
 }) {
   const [markdown, setMarkdown] = useState<string | null>(null);
   const [state, setState] = useState<"idle" | "loading" | "failed">("idle");
@@ -60,7 +61,16 @@ function ResearchActions({ gistId, url, title }: {
       >
         📄 Open Report
       </button>
-      <CopyButton getText={load} label="Copy as markdown" />
+      {canTypeset && (
+        <a
+          href={researchPdfUrl(gistId)}
+          className="text-xs font-medium px-2.5 py-1 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors"
+          title="Typeset as a PDF briefing note"
+        >
+          PDF
+        </a>
+      )}
+      <CopyButton getText={load} label="Copy as markdown" disabled={canExport === false} />
       <ShareButton getText={load} getTitle={() => title || "Research report"} label="Share report" />
       <button
         onClick={async () => {
@@ -193,6 +203,8 @@ function GistCard({ gist, podcastImage, onDelete }: { gist: Gist; podcastImage?:
             gistId={gist.id}
             url={research.public_url}
             title={gist.episode_title}
+            canExport={research.markdown}
+            canTypeset={research.pdf}
           />
         )}
         {research.status === "error" && (

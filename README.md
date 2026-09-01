@@ -152,9 +152,13 @@ subscription either way.
 - **📺 YouTube videos** — paste a link under Search → **YouTube** and the video joins your library as an ordinary episode: audio you can listen to, a word-level transcript, and every AI feature on top of it. Grouped under its channel, so videos filter and search like any show. See [YouTube videos](#youtube-videos).
 - **🔬 Research** — take a moment you found interesting and check it against sources outside the podcast: what actually happened, who disagrees, what has been published since. It is the one feature here that looks beyond your own library.
   The claim is built from the episode, its summary and the transcript around the moment — not the quote alone, which is often a fragment naming nothing searchable. The model turns that into web searches, and writes a verdict (*supported · mixed · contested · not supported · no evidence*) with sections that cite `[n]` linking to the sources they came from. It also says whether the same subject came up **elsewhere in your library**, which no web search can answer. Delivered via Telegram, with the report at `/reports/…`.
-  **Take it with you.** Copy the whole report as Markdown, share it, or save a
-  `.md` — rendered from the structure it was built from rather than scraped back
-  out of the page, which is also what would let it be typeset later.
+  **Take it with you.** Copy the whole report as Markdown, share it, save a
+  `.md`, or download it typeset as a PDF briefing note — three renderers over the
+  structure it was built from, never a scrape of the page. The PDF is
+  deliberately a briefing note rather than a paper: a model's synthesis of web
+  sources given an abstract and an author list would claim a rigour it does not
+  have. It needs the [Typst](https://typst.app) binary on the server; without it
+  the button is simply not offered.
   **It refuses rather than inventing.** No search key, no results, or no usable synthesis is a failure with the reason attached — never a report. That is not hypothetical: with `TAVILY_API_KEY` unset, every search returned nothing, and the earlier version wrote four sections explaining that it had no sources, marked itself done, and announced it as ready.
 - **📋 Saved** — distillations and bookmarks side by side, each grouped and copyable. Distills keep their Copy / Delete / Research controls; bookmarks jump back to the moment they were kept.
 - **↕️ Up Next** — a server-side queue, so a queue built on the laptop is the queue the phone plays. Reachable from the header on every screen, with a count. Add from the feed while skimming, from an episode page, or by sending a whole playlist to it.
@@ -446,6 +450,7 @@ Re-adding a video you already have is a no-op that returns the existing episode.
 | `backend/services/timeline.py` | Translating between the original audio and the clean cut |
 | `backend/services/jobs.py` | Turn-taking lanes so background work never competes with itself |
 | `backend/services/librarian.py` | Retrieval + prompting for a library-wide question |
+| `backend/services/typeset.py` | The report as a typeset PDF, via Typst |
 | `backend/services/embeddings.py` | Text → vectors, through Mistral or a local model |
 | `backend/services/semantic_index.py` | Transcript windows, their vectors, and the search over them |
 | `backend/services/chapterizer.py` | Chapter + summary generation |
@@ -501,6 +506,7 @@ Copy `.env.example` to `backend/.env` and edit:
 | `PUBLIC_URL` | Yes | Public-facing domain (CORS, OAuth redirect, report URLs) |
 | `PODCAST_INDEX_API_KEY` | No | Podcast Index API key for richer metadata |
 | `PODCAST_INDEX_SECRET` | No | Podcast Index API secret |
+| `TYPST_BIN` | No | Path to `typst` for PDF reports; resolved via PATH when empty. Without it, reports export as Markdown only |
 | `TAVILY_API_KEY` | No | Web search for research. Without it research refuses to run — the agent CLI is sandboxed with no network, so there is nothing to research *with* |
 | `TELEGRAM_BOT_TOKEN` | No | Telegram notifications |
 | `TELEGRAM_CHAT_ID` | No | Telegram chat ID |

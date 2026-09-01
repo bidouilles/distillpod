@@ -481,3 +481,78 @@ class TestMarkdownExport:
 
     async def test_no_report_no_markdown(self, client, with_key):
         assert (await client.get(f"/research/{GIST_ID}/markdown")).status_code == 404
+
+
+class TestPdfEndpoint:
+
+    async def test_no_binary_no_pdf(self, client, tmp_db, with_key, monkeypatch):
+        """A button that can only fail should not be offered, and the endpoint
+        behind it says why rather than returning a blank page."""
+        from services import typeset
+        monkeypatch.setattr(typeset, "available", lambda: False)
+        seed(tmp_db, "res-pdf", status="done")
+        r = await client.get(f"/research/{GIST_ID}/pdf")
+        assert r.status_code == 409
+        assert "typst" in r.json()["detail"]
+
+    async def test_a_report_without_stored_structure_cannot_be_typeset(
+        self, client, tmp_db, with_key, monkeypatch,
+    ):
+        from services import typeset
+        monkeypatch.setattr(typeset, "available", lambda: True)
+        seed(tmp_db, "res-old-pdf", status="done")
+        r = await client.get(f"/research/{GIST_ID}/pdf")
+        assert r.status_code == 409
+        assert "run it again" in r.json()["detail"]
+
+    async def test_the_status_says_which_renderings_are_possible(
+        self, client, tmp_db, with_key, monkeypatch,
+    ):
+        from services import typeset
+        monkeypatch.setattr(typeset, "available", lambda: True)
+        conn = sqlite3.connect(tmp_db)
+        conn.execute(
+            "INSERT INTO researches (id, gist_id, episode_id, status, public_url, "
+            "                        report_json, created_at) "
+            "VALUES ('r1', ?, ?, 'done', 'https://x/y.html', ?, '2026-01-01T00:00:00')",
+            (GIST_ID, EPISODE_ID_1, json.dumps({"claim": "c"})))
+        conn.commit()
+        conn.close()
+        body = (await client.get(f"/research/{GIST_ID}")).json()
+        assert body["markdown"] is True and body["pdf"] is True
+        # …and the raw structure is not shipped to the client.
+        assert "report_json" not in body
+
+    async def test_a_finished_report_is_typeset_and_cached(
+        self, client, tmp_db, with_key, monkeypatch, tmp_path,
+    ):
+        from config import settings
+        from services import typeset
+        monkeypatch.setattr(settings, "reports_dir", tmp_path)
+
+        calls = []
+
+        def fake_render(data, out_path):
+            calls.append(data)
+            out_path.write_bytes(b"%PDF-1.7 fake")
+            return out_path
+
+        monkeypatch.setattr(typeset, "available", lambda: True)
+        monkeypatch.setattr(typeset, "render", fake_render)
+
+        conn = sqlite3.connect(tmp_db)
+        conn.execute(
+            "INSERT INTO researches (id, gist_id, episode_id, status, report_json, created_at) "
+            "VALUES ('r2', ?, ?, 'done', ?, '2026-01-01T00:00:00')",
+            (GIST_ID, EPISODE_ID_1, json.dumps({"claim": "c", "report": {}})))
+        conn.commit()
+        conn.close()
+
+        first = await client.get(f"/research/{GIST_ID}/pdf")
+        assert first.status_code == 200
+        assert first.headers["content-type"] == "application/pdf"
+        assert first.content.startswith(b"%PDF")
+
+        second = await client.get(f"/research/{GIST_ID}/pdf")
+        assert second.status_code == 200
+        assert len(calls) == 1, "typeset the same report twice"

@@ -229,6 +229,10 @@ export interface Research {
   public_url?: string;
   /** Why it stopped — a missing key, or no sources for what it searched. */
   error?: string;
+  /** Whether the report was stored as data, so it can be rendered as text. */
+  markdown?: boolean;
+  /** …and whether the server can typeset it. */
+  pdf?: boolean;
 }
 
 export const triggerResearch = (gistId: string) =>
@@ -236,6 +240,9 @@ export const triggerResearch = (gistId: string) =>
 
 export const getResearch = (gistId: string) =>
   req<Research>("GET", `/research/${gistId}`);
+
+/** The typeset report. A plain link: the browser downloads it. */
+export const researchPdfUrl = (gistId: string) => `${BASE}/research/${gistId}/pdf`;
 
 /** The finished report as markdown, for copying, sharing or saving. */
 export const getResearchMarkdown = (gistId: string) =>

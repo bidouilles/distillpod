@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     # refuses to start rather than writing a report from no sources.
     tavily_api_key: str = ""
 
+    # Typesetting research reports. Optional: without the binary the PDF is
+    # simply not offered, and the Markdown covers the same ground.
+    typst_bin: str = ""                      # empty = look for `typst` on PATH
+
     @property
     def stt(self) -> str:
         if self.stt_backend in ("voxtral", "mlx", "whisper"):
