@@ -12,6 +12,8 @@ UI already polls /player/transcript-status/{id}, so no new progress channel is
 needed.
 """
 import asyncio
+
+from services import jobs
 import logging
 from datetime import datetime, timezone
 
@@ -25,6 +27,12 @@ from services.downloader import download_episode
 from services.transcriber import store_transcript, transcribe_episode
 
 log = logging.getLogger(__name__)
+
+async def _interactive_task(coro):
+    """Pasting a link is a person waiting, not housekeeping."""
+    with jobs.priority_scope(jobs.INTERACTIVE):
+        return await coro
+
 
 router = APIRouter(prefix="/youtube", tags=["youtube"])
 
@@ -120,7 +128,7 @@ def _start_ingest(episode_id: str, meta: dict) -> None:
         finally:
             _ingesting.discard(episode_id)
 
-    asyncio.create_task(_run())
+    asyncio.create_task(_interactive_task(_run()))
 
 
 # One channel import at a time, however many times subscribe is pressed.
@@ -141,7 +149,7 @@ def _start_channel_import(channel_id: str) -> None:
         finally:
             _importing.discard(channel_id)
 
-    asyncio.create_task(_run())
+    asyncio.create_task(_interactive_task(_run()))
 
 
 @router.post("/add")

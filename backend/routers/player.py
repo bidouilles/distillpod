@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from models import PlayRequest, ProgressUpdate, TranscriptStatus, Episode
+from services import jobs
 from services.downloader import download_episode, episode_local_path
 from services.transcriber import transcribe_episode
 from database import get_db
@@ -22,6 +23,12 @@ _transcribing: set[str] = set()
 # Downloads in flight, mapping episode id -> None while running, or the error
 # string if the last attempt failed. Absent means "not being downloaded".
 _downloading: dict[str, str | None] = {}
+
+
+async def _interactive(coro):
+    """Run something a person pressed a button for, ahead of housekeeping."""
+    with jobs.priority_scope(jobs.INTERACTIVE):
+        return await coro
 
 
 def _safe_file_path(raw_path: str) -> Path:
@@ -110,7 +117,10 @@ def _start_transcription(episode_id: str, local_path: Path) -> None:
 
     async def _run():
         try:
-            await transcribe_episode(episode_id, local_path)
+            # Someone pressed play and is watching a spinner, so this overtakes
+            # whatever housekeeping is queued in the same lanes.
+            with jobs.priority_scope(jobs.USER):
+                await transcribe_episode(episode_id, local_path)
         finally:
             _transcribing.discard(episode_id)
 
@@ -132,7 +142,8 @@ def _start_download(episode_id: str, audio_url: str, transcript_status: str) -> 
 
     async def _run():
         try:
-            path = await download_episode(episode_id, audio_url)
+            with jobs.priority_scope(jobs.USER):
+                path = await download_episode(episode_id, audio_url)
             db = await get_db()
             try:
                 await db.execute(
@@ -150,6 +161,17 @@ def _start_download(episode_id: str, audio_url: str, transcript_status: str) -> 
             _downloading[episode_id] = str(exc)
 
     asyncio.create_task(_run())
+
+
+@router.get("/jobs")
+async def background_jobs():
+    """What the server is working on, per resource.
+
+    A spinner with no explanation is the complaint this answers: pressing play
+    while the nightly sync held the transcription lane looked identical to the
+    app being broken.
+    """
+    return jobs.status()
 
 
 @router.get("/download-status/{episode_id}")
@@ -171,11 +193,18 @@ async def download_status(episode_id: str):
         raise HTTPException(404, "Episode not found")
 
     on_disk = bool(row["downloaded"]) and bool(row["local_path"]) and Path(row["local_path"]).exists()
+    lanes = jobs.status()
+    # Which lane this episode's audio is coming through, so the player can say
+    # "waiting for the server" rather than spinning silently.
+    lane_name = "youtube" if str(row["local_path"] or "").endswith(".m4a") or episode_id.startswith("yt-") else "media"
+    lane = lanes.get(lane_name, {})
     return {
         "episode_id": episode_id,
         "downloaded": on_disk,
         "downloading": error is None,        # present in the map with no error
         "error": error if isinstance(error, str) else None,
+        "doing": lane.get("running"),
+        "waiting": lane.get("waiting", 0),
     }
 
 
@@ -441,7 +470,7 @@ async def start_backfill():
     from services import backfill
     if backfill.status()["running"]:
         return {"status": "already_running", **backfill.status()}
-    asyncio.create_task(backfill.run())
+    asyncio.create_task(_interactive(backfill.run()))
     return {"status": "started", "pending": await backfill.pending_count()}
 
 

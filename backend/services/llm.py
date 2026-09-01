@@ -173,7 +173,9 @@ async def arun(
     default: Any = ...,
 ) -> str:
     """Non-blocking `run` — the CLI call happens in a worker thread."""
-    return await asyncio.to_thread(run, prompt, schema=schema, timeout=timeout, default=default)
+    from services import jobs
+    async with jobs.lane("llm", label="agent call"):
+        return await asyncio.to_thread(run, prompt, schema=schema, timeout=timeout, default=default)
 
 
 async def arun_json(
@@ -184,4 +186,6 @@ async def arun_json(
     default: Any = ...,
 ) -> Any:
     """Non-blocking `run_json`."""
-    return await asyncio.to_thread(run_json, prompt, schema=schema, timeout=timeout, default=default)
+    from services import jobs
+    async with jobs.lane("llm", label="agent call"):
+        return await asyncio.to_thread(run_json, prompt, schema=schema, timeout=timeout, default=default)

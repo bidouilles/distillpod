@@ -85,7 +85,9 @@ async def auto_snip_recent(db, podcast_id: str, podcast_title: str) -> int:
             log.info(f'  Auto-snipping: {ep_row["title"][:50]}')
 
             loop = asyncio.get_event_loop()
-            snips = await loop.run_in_executor(None, pick_snips, transcript_row['words_json'])
+            from services import jobs as _jobs
+            async with _jobs.lane("llm", label="nightly auto-snips"):
+                snips = await loop.run_in_executor(None, pick_snips, transcript_row['words_json'])
             if not snips:
                 log.info('  no auto-snips picked')
                 continue
@@ -228,7 +230,9 @@ async def process_subscription(podcast_id: str, feed_url: str, title: str) -> di
             log.info(f"  🎙  Transcribing: {ep.title[:70]}")
             try:
                 loop = asyncio.get_event_loop()
-                words = await loop.run_in_executor(None, stt.transcribe, str(local_path))
+                from services import jobs as _jobs
+                async with _jobs.lane("stt", label=f"nightly transcribe: {ep.title[:40]}"):
+                    words = await loop.run_in_executor(None, stt.transcribe, str(local_path))
 
                 await db.execute(
                     """INSERT OR REPLACE INTO transcripts
@@ -310,9 +314,11 @@ async def process_subscription(podcast_id: str, feed_url: str, title: str) -> di
                 await db.commit()
 
                 loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(
-                    None, chapterize, transcript_row['words_json']
-                )
+                from services import jobs as _jobs
+                async with _jobs.lane("llm", label=f"nightly chapters: {ep_id}"):
+                    result = await loop.run_in_executor(
+                        None, chapterize, transcript_row['words_json']
+                    )
 
                 # Delete old chapters if any (re-run safety)
                 await db.execute('DELETE FROM chapters WHERE episode_id = ?', (ep_id,))
@@ -473,6 +479,16 @@ async def report_errors() -> None:
 
 
 async def main() -> None:
+    # The same lock files the app uses, so the two processes take turns on
+    # yt-dlp, transcription and the agent CLI instead of competing. Everything
+    # here is housekeeping, which is the default priority: a listener pressing
+    # play goes first.
+    from pathlib import Path as _Path
+
+    from config import settings as _settings
+    from services import jobs
+    jobs.set_lock_dir(_Path(_settings.db_path).parent / "locks")
+
     log.info("=" * 60)
     log.info("DistillPod Daily Sync — starting")
     log.info("=" * 60)

@@ -65,6 +65,10 @@ async def startup():
     await init_db()
     settings.media_dir.mkdir(parents=True, exist_ok=True)
     settings.reports_dir.mkdir(parents=True, exist_ok=True)
+    # Background work takes turns per resource, and the nightly script is a
+    # separate process — so the turns are held through lock files both can see.
+    from services import jobs
+    jobs.set_lock_dir(Path(settings.db_path).parent / "locks")
 
 
 @app.get("/proxy/image")

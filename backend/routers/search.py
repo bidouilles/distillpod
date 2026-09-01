@@ -102,7 +102,13 @@ async def build_index():
     from services import embeddings
     if not embeddings.available():
         return {"status": "unavailable", **await semantic_index.coverage()}
-    asyncio.create_task(semantic_index.run())
+    from services import jobs
+
+    async def _run():
+        with jobs.priority_scope(jobs.INTERACTIVE):
+            await semantic_index.run()
+
+    asyncio.create_task(_run())
     return {"status": "started", **await semantic_index.coverage()}
 
 

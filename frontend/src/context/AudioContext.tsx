@@ -171,6 +171,8 @@ interface AudioContextValue {
   isPlaying:         boolean;
   currentTime:       number;
   preparing:         string | null;
+  /** What the server is busy with while `preparing` — "" when it is this one. */
+  preparingNote:     string;
   duration:          number;
   audioReady:        boolean;
   loadEpisode:       (id: string, ep: PlayableEpisode | null, seekTo?: number) => Promise<void>;
@@ -217,6 +219,8 @@ export function AudioProvider({ children }: { children: ReactNode }) {
   const [currentTime,    setCurrentTime]    = useState(0);
   // Episode id whose audio is being fetched, so the UI can say so.
   const [preparing,      setPreparing]      = useState<string | null>(null);
+  // …and what the server is actually doing meanwhile, so the wait is legible.
+  const [preparingNote,  setPreparingNote]  = useState<string>("");
   const [duration,       setDuration]       = useState(0);
   const [audioReady,     setAudioReady]     = useState(false);
   const [playerExpanded, setPlayerExpanded] = useState(false);
@@ -378,12 +382,20 @@ export function AudioProvider({ children }: { children: ReactNode }) {
           if (s.downloaded) return true;
           if (s.error) return false;
           if (!s.downloading) return false;   // nothing running and nothing on disk
+          // The server takes turns per resource, so a wait can be someone
+          // else's turn rather than this download being slow.
+          setPreparingNote(
+            s.doing && !s.doing.includes(id)
+              ? `Waiting for the server — ${s.doing}`
+              : "Fetching the audio…",
+          );
         } catch { /* transient — keep waiting */ }
         await new Promise(r => setTimeout(r, 1000));
       }
       return false;
     } finally {
       setPreparing(null);
+      setPreparingNote("");
     }
   }, []);
 
@@ -559,6 +571,7 @@ export function AudioProvider({ children }: { children: ReactNode }) {
   return (
     <Ctx.Provider value={{
       episode, audioRef, isPlaying, currentTime, duration, audioReady, preparing,
+      preparingNote,
       loadEpisode, togglePlay, seek, skipBy, rate, setRate, settings,
       sleepMode, sleepRemaining, setSleepTimer,
       playerExpanded, setPlayerExpanded,

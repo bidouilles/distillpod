@@ -119,6 +119,7 @@ backend/
     ad_detector.py     # Ad segment detection (the model call)
     audio_processor.py # Silence measurement, the ffmpeg cut, and its mapping
     timeline.py        # Original <-> clean-cut clock conversion
+    jobs.py            # Turn-taking lanes: one job at a time per resource
     librarian.py       # Plan searches -> retrieve passages -> answer with citations
     embeddings.py      # Text -> vectors (mistral | local | off), normalised here
     semantic_index.py  # Transcript windows + vector search feeding the librarian
@@ -164,6 +165,23 @@ scripts/
   is only useful because it is cheap, and in a vault six months later, which of
   the two produced a quote is the difference between standing behind it and
   having to check it.
+- **Background work takes turns per resource** (`services/jobs.py`). Nine places
+  started work with `create_task` and the cron script did the same work from
+  another process, so a play could race the nightly sync for yt-dlp and for the
+  two cores. Lanes — `youtube`, `media`, `stt`, `llm`, `web` — are serialised
+  independently, so fetching audio does not wait on a transcription, and turns
+  in `youtube` are spaced because being refused there costs hours. Priority is a
+  contextvar (`jobs.priority_scope`), so a request handler marks the play path
+  `USER` once and every service call underneath inherits it; housekeeping stays
+  at the default `BACKGROUND`. Serialisation crosses processes through a lock
+  file per lane, which is why `set_lock_dir` is called both at app startup and
+  at the top of `scripts/daily-sync.py`. Adding a new yt-dlp or model call means
+  wrapping it in `async with jobs.lane(...)`, not adding another `create_task`.
+- **A YouTube episode tries its own captions before speech-to-text.** They carry
+  word-level timings, cost nothing and arrive in seconds. The ingest path always
+  did this; the play path did not, so any video the nightly caption pass had not
+  reached was sent to a paid backend to re-derive a transcript YouTube would
+  have handed over. See `transcriber._obtain_words`.
 - **Research refuses rather than degrading.** `services/researcher.py` needs
   `TAVILY_API_KEY`: the agent CLI runs sandboxed with no network, so a search API
   is the only way out of the box. With the key unset in production, every search

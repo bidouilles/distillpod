@@ -441,6 +441,7 @@ Re-adding a video you already have is a no-op that returns the existing episode.
 | `backend/services/ad_detector.py` | Ad classification (the model call) |
 | `backend/services/audio_processor.py` | Silence measurement + the ffmpeg cut, and the map it produces |
 | `backend/services/timeline.py` | Translating between the original audio and the clean cut |
+| `backend/services/jobs.py` | Turn-taking lanes so background work never competes with itself |
 | `backend/services/librarian.py` | Retrieval + prompting for a library-wide question |
 | `backend/services/embeddings.py` | Text → vectors, through Mistral or a local model |
 | `backend/services/semantic_index.py` | Transcript windows, their vectors, and the search over them |
@@ -554,6 +555,27 @@ ProxyPreserveHost On
 ProxyPass / http://127.0.0.1:8124/
 ProxyPassReverse / http://127.0.0.1:8124/
 ```
+
+### Background work
+
+Everything slow happens in the background, and everything background takes turns
+per resource rather than running at once:
+
+| Lane | What is in it | Why it is serialised |
+|---|---|---|
+| `youtube` | every yt-dlp call — metadata, captions, channel listings, audio | YouTube rate-limits by address, and being refused costs hours, so turns are also spaced 4s apart |
+| `media` | podcast audio downloads | the episode you are waiting for finishes sooner than three finishing together |
+| `stt` | transcription | it bills, or it pins a core |
+| `llm` | the agent CLI | two of those on a two-core box is neither |
+| `web` | search and embeddings | pacing |
+
+Lanes are independent, so fetching audio never waits on a transcription. Within
+a lane, work someone is waiting on goes first: pressing play overtakes the
+nightly backlog, and the turn already in progress is the only thing it waits
+for. The nightly script is a separate process, so the turns are held through a
+lock file per lane that both processes see.
+
+Library → Storage shows what is running and what is queued.
 
 ### Scheduled jobs
 

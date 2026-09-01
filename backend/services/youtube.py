@@ -35,6 +35,7 @@ from typing import Optional
 
 import httpx
 
+from services import jobs
 from config import settings
 
 log = logging.getLogger(__name__)
@@ -165,7 +166,8 @@ def _resolve_channel_blocking(url: str) -> dict:
 
 
 async def resolve_channel(url: str) -> dict:
-    return await asyncio.to_thread(_resolve_channel_blocking, url)
+    async with jobs.lane("youtube", label="resolve channel"):
+        return await asyncio.to_thread(_resolve_channel_blocking, url)
 
 
 def _channel_videos_blocking(channel_id: str, limit: int) -> list[dict]:
@@ -253,7 +255,8 @@ async def fetch_channel_videos(channel_id: str, limit: int = 15) -> list[dict]:
     decides what counts and how long it runs, the Atom feed supplies the
     publish dates the tab omits.
     """
-    videos = await asyncio.to_thread(_channel_videos_blocking, channel_id, limit)
+    async with jobs.lane("youtube", label=f"list channel {channel_id}"):
+        videos = await asyncio.to_thread(_channel_videos_blocking, channel_id, limit)
     if not videos:
         return []
     dates = await _feed_dates(channel_id)
@@ -281,7 +284,8 @@ def _fetch_metadata_blocking(url: str) -> dict:
 
 async def fetch_metadata(url: str) -> dict:
     """Everything about one video in a single call. Off the event loop."""
-    return await asyncio.to_thread(_fetch_metadata_blocking, url)
+    async with jobs.lane("youtube", label="video metadata"):
+        return await asyncio.to_thread(_fetch_metadata_blocking, url)
 
 
 def published_at(meta: dict) -> Optional[datetime]:
@@ -493,9 +497,10 @@ async def fetch_caption_words(meta: dict) -> list[dict]:
         first_error = str(exc)
         log.info("caption URL fetch failed (%s), retrying via yt-dlp", exc)
         try:
-            payload = await asyncio.to_thread(
-                _fetch_json3_via_ytdlp, meta.get("webpage_url") or "", lang
-            )
+            async with jobs.lane("youtube", label="captions (yt-dlp retry)"):
+                payload = await asyncio.to_thread(
+                    _fetch_json3_via_ytdlp, meta.get("webpage_url") or "", lang
+                )
         except YouTubeError as exc:
             raise YouTubeError(
                 f"caption track {lang} exists but could not be fetched "
@@ -535,4 +540,5 @@ def _download_audio_blocking(url: str, dest: Path) -> Path:
 
 
 async def download_audio(url: str, dest: Path) -> Path:
-    return await asyncio.to_thread(_download_audio_blocking, url, dest)
+    async with jobs.lane("youtube", label="download audio"):
+        return await asyncio.to_thread(_download_audio_blocking, url, dest)

@@ -10,7 +10,7 @@ import hashlib
 import httpx
 from pathlib import Path
 from config import settings
-from services import youtube
+from services import jobs, youtube
 
 # One lock per destination. A YouTube video is fetched in the background as
 # soon as it is added, and the user may well hit Play while that is still
@@ -44,14 +44,21 @@ async def download_episode(episode_id: str, audio_url: str) -> Path:
         part = dest.with_name(dest.name + ".part")
         try:
             if youtube.is_youtube_url(audio_url):
+                # yt-dlp takes its turn inside download_audio, in the youtube
+                # lane — the constraint there is YouTube's rate limit, not this
+                # box's bandwidth.
                 await youtube.download_audio(audio_url, part)
             else:
-                async with httpx.AsyncClient(follow_redirects=True, timeout=300) as client:
-                    async with client.stream("GET", audio_url) as r:
-                        r.raise_for_status()
-                        with open(part, "wb") as f:
-                            async for chunk in r.aiter_bytes(chunk_size=65536):
-                                f.write(chunk)
+                # One podcast download at a time. Three at once share the line
+                # and all finish later; the person waiting to play wants the
+                # first one done, not all three eventually.
+                async with jobs.lane("media", label=f"download: {episode_id}"):
+                    async with httpx.AsyncClient(follow_redirects=True, timeout=300) as client:
+                        async with client.stream("GET", audio_url) as r:
+                            r.raise_for_status()
+                            with open(part, "wb") as f:
+                                async for chunk in r.aiter_bytes(chunk_size=65536):
+                                    f.write(chunk)
             part.replace(dest)
         finally:
             part.unlink(missing_ok=True)

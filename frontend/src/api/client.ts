@@ -112,9 +112,25 @@ export const startPlay = (episodeId: string, audioUrl: string) =>
 /** Downloads run server-side, so several can be fetched at once and none of
  *  them depend on a screen staying open. */
 export const getDownloadStatus = (episodeId: string) =>
-  req<{ downloaded: boolean; downloading: boolean; error: string | null }>(
-    "GET", `/player/download-status/${episodeId}`
-  );
+  req<{
+    downloaded: boolean; downloading: boolean; error: string | null;
+    /** What the server is doing in this episode's lane, and how many turns are
+     *  queued behind it — so a wait can say why. */
+    doing?: string | null; waiting?: number;
+  }>("GET", `/player/download-status/${episodeId}`);
+
+export interface LaneStatus {
+  running: string | null;
+  running_for: number;
+  priority: string;
+  waiting: number;
+  queue: string[];
+  completed: number;
+}
+
+/** What the server is working on, per resource. */
+export const getBackgroundJobs = () =>
+  req<Record<string, LaneStatus>>("GET", "/player/jobs");
 
 export const getTranscriptStatus = (episodeId: string) =>
   req<{ status: string }>("GET", `/player/transcript-status/${episodeId}`);

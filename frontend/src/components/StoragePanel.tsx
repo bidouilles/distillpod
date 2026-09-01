@@ -3,6 +3,7 @@ import {
   getStorage, pruneStorage, setRetentionPolicy,
   type PruneResult, type StorageUsage,
 } from "../api/client";
+import ActivityCard from "./ActivityCard";
 
 /**
  * What the media directory is costing, and how to get it back.
@@ -91,10 +92,20 @@ export default function StoragePanel() {
   };
 
   if (loading && !usage) {
-    return <div className="bg-gray-900 rounded-2xl h-40 animate-pulse" />;
+    return (
+      <div className="space-y-4">
+        <ActivityCard />
+        <div className="bg-gray-900 rounded-2xl h-40 animate-pulse" />
+      </div>
+    );
   }
   if (!usage) {
-    return <p className="text-sm text-gray-500 text-center py-8">{error || "No storage data."}</p>;
+    return (
+      <div className="space-y-4">
+        <ActivityCard />
+        <p className="text-sm text-gray-500 text-center py-8">{error || "No storage data."}</p>
+      </div>
+    );
   }
 
   const biggest = usage.by_podcast.slice(0, 8);
@@ -102,6 +113,10 @@ export default function StoragePanel() {
 
   return (
     <div className="space-y-4">
+      {/* What the server is doing, above what it has stored: one is happening
+          now and the other is a standing total. */}
+      <ActivityCard />
+
       {/* Total */}
       <div className="bg-gray-900 rounded-2xl px-4 py-4">
         <div className="flex items-end justify-between">
