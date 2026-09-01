@@ -61,6 +61,14 @@ const SHELL: Record<Variant, string> = {
 /** True where the browser can actually open a share sheet. */
 export const canShare = typeof navigator !== "undefined" && !!navigator.share;
 
+/** What a copy or share button asks for when pressed.
+ *
+ *  Allowed to be async: some of what these buttons offer is fetched on demand
+ *  rather than already on screen — a research report is rendered from stored
+ *  structure, and most are never exported, so fetching it eagerly for every
+ *  card would be waste. */
+export type TextSource = () => string | Promise<string>;
+
 export function CopyButton({
   getText,
   label = "Copy",
@@ -68,7 +76,7 @@ export function CopyButton({
   className = "",
   disabled = false,
 }: {
-  getText: () => string;
+  getText: TextSource;
   label?: string;
   variant?: Variant;
   className?: string;
@@ -77,7 +85,12 @@ export function CopyButton({
   const [state, setState] = useState<"idle" | "ok" | "fail">("idle");
 
   const onClick = async () => {
-    const ok = await copyText(getText());
+    let ok = false;
+    try {
+      ok = await copyText(await getText());
+    } catch {
+      ok = false;              // the text could not be fetched
+    }
     setState(ok ? "ok" : "fail");
     setTimeout(() => setState("idle"), 1500);
   };
@@ -108,7 +121,7 @@ export function ShareButton({
   variant = "icon",
   className = "",
 }: {
-  getText: () => string;
+  getText: TextSource;
   getTitle?: () => string;
   label?: string;
   variant?: Variant;
@@ -121,7 +134,7 @@ export function ShareButton({
 
   const onClick = async () => {
     try {
-      await navigator.share({ title: getTitle?.() || "DistillPod", text: getText() });
+      await navigator.share({ title: getTitle?.() || "DistillPod", text: await getText() });
       setShared(true);
       setTimeout(() => setShared(false), 1500);
     } catch { /* dismissed — nothing to report */ }

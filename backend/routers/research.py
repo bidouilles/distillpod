@@ -69,6 +69,50 @@ async def trigger_research(gist_id: str):
         await db.close()
 
 
+@router.get("/{gist_id}/markdown")
+async def research_markdown(gist_id: str):
+    """The finished report as text, for pasting into a note or a message.
+
+    Rendered from the structure the report was built from rather than scraped
+    back out of the page, which is why that structure is stored. A report from
+    before it was stored has only the page, and says so rather than returning
+    something half-recovered.
+    """
+    import json as _json
+
+    db = await get_db()
+    try:
+        row = await (
+            await db.execute(
+                "SELECT status, report_json, public_url FROM researches "
+                "WHERE gist_id = ? ORDER BY created_at DESC LIMIT 1",
+                (gist_id,),
+            )
+        ).fetchone()
+    finally:
+        await db.close()
+
+    if not row or row["status"] != "done":
+        raise HTTPException(404, "No finished report for this distillation")
+    if not row["report_json"]:
+        raise HTTPException(
+            409,
+            "This report predates text export — run it again to get a copyable version.",
+        )
+    try:
+        data = _json.loads(row["report_json"])
+    except ValueError:
+        raise HTTPException(500, "The stored report could not be read")
+
+    markdown = researcher.build_markdown(
+        claim=data.get("claim", ""), report=data.get("report", {}),
+        sources=data.get("sources", []), echoes=data.get("echoes", []),
+        episode=data.get("episode", {}), gist={"text": data.get("quote", "")},
+        queries=data.get("queries", []),
+    )
+    return {"gist_id": gist_id, "markdown": markdown, "url": row["public_url"]}
+
+
 @router.get("/{gist_id}")
 async def get_research(gist_id: str):
     db = await get_db()

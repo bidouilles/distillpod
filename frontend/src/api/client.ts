@@ -237,6 +237,11 @@ export const triggerResearch = (gistId: string) =>
 export const getResearch = (gistId: string) =>
   req<Research>("GET", `/research/${gistId}`);
 
+/** The finished report as markdown, for copying, sharing or saving. */
+export const getResearchMarkdown = (gistId: string) =>
+  req<{ gist_id: string; markdown: string; url?: string }>(
+    "GET", `/research/${gistId}/markdown`);
+
 // --- Ad-free ---
 export interface AdFreeStatus {
   has_adfree: boolean;

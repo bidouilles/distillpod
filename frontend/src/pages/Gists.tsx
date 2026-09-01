@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef } from "react";
-import { CopyButton } from "../components/ActionButtons";
 import { useNavigate } from "react-router-dom";
-import { listGists, deleteGist, getSubscriptions, triggerResearch, getResearch, Gist, Subscription, Research } from "../api/client";
+import { listGists, deleteGist, getSubscriptions, triggerResearch, getResearch, getResearchMarkdown, Gist, Subscription, Research } from "../api/client";
+import { CopyButton, ShareButton, DownloadIcon } from "../components/ActionButtons";
+import { downloadText, slugify } from "../lib/clipboard";
 
 function fmtTime(secs: number) {
   const m = Math.floor(secs / 60);
@@ -21,6 +22,65 @@ function parseGistSummary(summary: string | undefined): { quote?: string; insigh
     if (parsed.quote || parsed.insight) return parsed;
   } catch {}
   return { insight: summary };
+}
+
+/**
+ * A finished report: open it, or take it with you.
+ *
+ * The page was the only way to consume a report, so anything worth keeping had
+ * to be selected out of a browser tab. Markdown is fetched on demand — it is
+ * rendered from the stored structure, and most reports are never exported.
+ */
+function ResearchActions({ gistId, url, title }: {
+  gistId: string; url: string; title?: string;
+}) {
+  const [markdown, setMarkdown] = useState<string | null>(null);
+  const [state, setState] = useState<"idle" | "loading" | "failed">("idle");
+
+  const load = async (): Promise<string> => {
+    if (markdown) return markdown;
+    setState("loading");
+    try {
+      const r = await getResearchMarkdown(gistId);
+      setMarkdown(r.markdown);
+      setState("idle");
+      return r.markdown;
+    } catch (e: any) {
+      setState("failed");
+      throw e;
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-1 flex-wrap">
+      <button
+        onClick={() => window.open(url, "_blank")}
+        className="text-xs font-semibold px-3 py-1 rounded-lg"
+        style={{ background: "#FFD700", color: "#1A1A1A" }}
+      >
+        📄 Open Report
+      </button>
+      <CopyButton getText={load} label="Copy as markdown" />
+      <ShareButton getText={load} getTitle={() => title || "Research report"} label="Share report" />
+      <button
+        onClick={async () => {
+          const text = await load().catch(() => null);
+          if (text) downloadText(`${slugify(title || "research")}.md`, text);
+        }}
+        aria-label="Download as markdown"
+        title="Download as .md"
+        className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-white rounded-full hover:bg-gray-800 transition-colors"
+      >
+        <DownloadIcon />
+      </button>
+      {state === "loading" && <span className="text-[10px] text-gray-600">…</span>}
+      {state === "failed" && (
+        <span className="text-[10px] text-gray-600">
+          run it again for a copyable version
+        </span>
+      )}
+    </div>
+  );
 }
 
 function GistCard({ gist, podcastImage, onDelete }: { gist: Gist; podcastImage?: string; onDelete: () => void }) {
@@ -129,13 +189,11 @@ function GistCard({ gist, podcastImage, onDelete }: { gist: Gist; podcastImage?:
           <span className="text-xs text-gray-400">⏳ Checking sources… (1–2 min)</span>
         )}
         {research.status === "done" && research.public_url && (
-          <button
-            onClick={() => window.open(research.public_url, "_blank")}
-            className="text-xs font-semibold px-3 py-1 rounded-lg"
-            style={{ background: "#FFD700", color: "#1A1A1A" }}
-          >
-            📄 Open Report
-          </button>
+          <ResearchActions
+            gistId={gist.id}
+            url={research.public_url}
+            title={gist.episode_title}
+          />
         )}
         {research.status === "error" && (
           <div className="text-xs text-red-400 space-y-1">

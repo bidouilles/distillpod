@@ -113,7 +113,8 @@ async def plan_queries(question: str, history: list[dict] | None = None) -> list
     return queries[:5]
 
 
-async def gather(db, queries: list[str], question: str = "") -> list[dict]:
+async def gather(db, queries: list[str], question: str = "",
+                 min_signals: int = 1) -> list[dict]:
     """Passages matching the searches, best first.
 
     Two retrieval paths, fused by reciprocal rank: keyword hits for each planned
@@ -121,13 +122,21 @@ async def gather(db, queries: list[str], question: str = "") -> list[dict]:
     question itself. A passage both paths rank highly is almost certainly about
     the subject; one found by a single path still gets through, which is what
     makes each path's blind spot survivable.
+
+    `min_signals` raises the bar to corroboration: only passages found by that
+    many separate searches survive. Answering a question wants everything that
+    might help, because the model can weigh it and say when it is thin. Claiming
+    "you heard about this elsewhere" cannot — one loose keyword match is a false
+    claim, so that caller asks for two.
     """
     found: dict[tuple[str, int], dict] = {}
     votes: dict[tuple[str, int], float] = {}
+    signals: dict[tuple[str, int], set] = {}
 
-    def register(key: tuple[str, int], passage: dict, rank: int) -> None:
+    def register(key: tuple[str, int], passage: dict, rank: int, signal: str) -> None:
         """Record a hit and its vote from one retrieval path."""
         votes[key] = votes.get(key, 0.0) + 1.0 / (RRF_K + rank)
+        signals.setdefault(key, set()).add(signal)
         existing = found.get(key)
         if existing is None:
             found[key] = passage
@@ -193,6 +202,7 @@ async def gather(db, queries: list[str], question: str = "") -> list[dict]:
                         "text": snippet["text"],
                     },
                     rank,
+                    signal=query,
                 )
 
     # ── meaning ──────────────────────────────────────────────────────────────
@@ -211,9 +221,12 @@ async def gather(db, queries: list[str], question: str = "") -> list[dict]:
                 "published_at": hit["published_at"],
                 "start": hit["start"],
                 "text": hit["text"],
-            }, rank)
+            }, rank, signal="meaning")
 
-    passages = sorted(found.items(), key=lambda item: votes[item[0]], reverse=True)
+    corroborated = [
+        item for item in found.items() if len(signals.get(item[0], ())) >= min_signals
+    ]
+    passages = sorted(corroborated, key=lambda item: votes[item[0]], reverse=True)
 
     # Trim to what a single call can carry.
     kept: list[dict] = []

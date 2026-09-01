@@ -297,6 +297,10 @@ async def init_db():
             # before that point. See services/timeline.py.
             'ALTER TABLE episodes ADD COLUMN processed_segments TEXT',
             'ALTER TABLE episodes ADD COLUMN trimmed_seconds REAL',
+            # The report as data, not just as the page it was rendered into.
+            # Without it a finished report can only ever be looked at: there is
+            # nothing to copy, share or re-render from.
+            'ALTER TABLE researches ADD COLUMN report_json TEXT',
         ]:
             try:
                 await db.execute(alter)

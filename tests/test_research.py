@@ -393,3 +393,91 @@ class TestSourceQuality:
             gist={"text": long_quote}, queries=[])
         assert "…" in html
         assert html.count("word") < 200
+
+
+class TestMarkdownExport:
+    """A finished report used to exist only as a page to look at, so anything
+    worth keeping had to be selected out of a browser tab."""
+
+    REPORT = {
+        "verdict": "mixed",
+        "verdict_note": "Confirmed in part [1]; disputed [2].",
+        "sections": [{"heading": "What happened", "body": "A tool found three CVEs [1]."}],
+        "open_questions": ["How many were exploitable?"],
+    }
+
+    def test_it_carries_the_verdict_the_claim_and_the_sources(self):
+        md = researcher.build_markdown(
+            claim="Do agents outpace patching?", report=self.REPORT, sources=SOURCES,
+            echoes=[], episode={"title": "Ep", "podcast_title": "Show"},
+            gist={"text": "a quote"}, queries=["agents patching"])
+        assert md.startswith("# Do agents outpace patching?")
+        assert "**Mixed evidence**" in md
+        assert "> a quote" in md
+        assert "## What happened" in md
+        assert "1. [Runtime escape disclosed](https://example.com/a)" in md
+        assert "Searched: agents patching" in md
+
+    def test_open_questions_and_library_echoes_survive(self):
+        md = researcher.build_markdown(
+            claim="c", report=self.REPORT, sources=SOURCES,
+            echoes=[{"podcast_title": "Low Level", "episode_title": "Rust worms",
+                     "start": 3725.0}],
+            episode={"title": "Ep"}, gist={}, queries=[])
+        assert "How many were exploitable?" in md
+        assert "Low Level" in md and "1:02:05" in md
+
+    def test_a_long_quote_is_trimmed_here_too(self):
+        md = researcher.build_markdown(
+            claim="c", report=self.REPORT, sources=SOURCES, echoes=[],
+            episode={"title": "Ep"}, gist={"text": " ".join(["word"] * 300)}, queries=[])
+        assert "…" in md
+
+    async def test_the_endpoint_renders_from_the_stored_structure(
+        self, client, episode_context, with_key, monkeypatch, tmp_path,
+    ):
+        from config import settings
+        monkeypatch.setattr(settings, "reports_dir", tmp_path)
+
+        async def plan(premise):
+            return "Was there an unreported container escape?", ["container escape"]
+
+        async def sources(queries):
+            return SOURCES
+
+        async def synth(claim, premise, srcs):
+            return self.REPORT
+
+        async def echoes(episode_id, claim, queries):
+            return []
+
+        async def notify(text):
+            return None
+
+        for name, fn in (("plan", plan), ("search_web", sources), ("synthesise", synth),
+                         ("library_echoes", echoes), ("notify", notify)):
+            monkeypatch.setattr(researcher, name, fn)
+
+        seed(episode_context, "res-md")
+        assert (await researcher.run_research("res-md", GIST_ID))["status"] == "done"
+
+        r = await client.get(f"/research/{GIST_ID}/markdown")
+        assert r.status_code == 200
+        assert "**Mixed evidence**" in r.json()["markdown"]
+        assert "https://example.com/a" in r.json()["markdown"]
+
+    async def test_a_report_from_before_this_says_so(self, client, tmp_db, with_key):
+        """Rather than half-recovering something from the page."""
+        conn = sqlite3.connect(tmp_db)
+        conn.execute(
+            "INSERT INTO researches (id, gist_id, episode_id, status, public_url, created_at) "
+            "VALUES ('old', ?, ?, 'done', 'https://x/y.html', '2026-01-01T00:00:00')",
+            (GIST_ID, EPISODE_ID_1))
+        conn.commit()
+        conn.close()
+        r = await client.get(f"/research/{GIST_ID}/markdown")
+        assert r.status_code == 409
+        assert "run it again" in r.json()["detail"]
+
+    async def test_no_report_no_markdown(self, client, with_key):
+        assert (await client.get(f"/research/{GIST_ID}/markdown")).status_code == 404

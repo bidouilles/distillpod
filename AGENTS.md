@@ -188,6 +188,19 @@ scripts/
   did this; the play path did not, so any video the nightly caption pass had not
   reached was sent to a paid backend to re-derive a transcript YouTube would
   have handed over. See `transcriber._obtain_words`.
+- **A report is data first, a page second.** `researches.report_json` holds the
+  claim, verdict, sections, sources and echoes; the HTML and the Markdown are
+  both renderers over it. Anything else — a typeset PDF — should be a third
+  renderer, never a scrape of the HTML. Reports made before that column exists
+  can only be viewed, and the endpoint says so instead of half-recovering them.
+- **The library cross-reference demands corroboration.** It asked with the claim
+  as one keyword query, and `fts_any_query` ORs prefix-matched tokens — so a
+  French sentence matched every transcript through "les", "des", "pour", and a
+  report on AI-found vulnerabilities cited an episode about telephone scammers.
+  It now asks with the planned searches and `min_signals=2`: a passage must be
+  found by two of them, or by meaning as well as by word. Ask keeps
+  `min_signals=1`, because a model can weigh a thin passage and say so, while a
+  "you heard this elsewhere" heading cannot.
 - **Research refuses rather than degrading.** `services/researcher.py` needs
   `TAVILY_API_KEY`: the agent CLI runs sandboxed with no network, so a search API
   is the only way out of the box. With the key unset in production, every search
