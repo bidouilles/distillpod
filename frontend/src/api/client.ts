@@ -241,6 +241,29 @@ export const triggerResearch = (gistId: string) =>
 export const getResearch = (gistId: string) =>
   req<Research>("GET", `/research/${gistId}`);
 
+export interface ReportSummary {
+  id: string;
+  gist_id: string;
+  episode_id: string;
+  episode_title?: string | null;
+  podcast_title?: string | null;
+  status: Research["status"];
+  public_url?: string | null;
+  error?: string | null;
+  created_at: string;
+  finished_at?: string | null;
+  /** From the stored structure — empty for reports made before it was kept. */
+  claim: string;
+  verdict: string;
+  sources: number;
+  markdown: boolean;
+  pdf: boolean;
+}
+
+export const listReports = () => req<ReportSummary[]>("GET", "/research");
+
+export const deleteReport = (gistId: string) => req("DELETE", `/research/${gistId}`);
+
 /** The typeset report. A plain link: the browser downloads it. */
 export const researchPdfUrl = (gistId: string) => `${BASE}/research/${gistId}/pdf`;
 

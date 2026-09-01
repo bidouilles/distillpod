@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,7 +12,93 @@ from config import settings
 from database import get_db
 from services import researcher, typeset
 
+log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/research", tags=["research"])
+
+
+@router.get("")
+async def list_reports() -> list[dict]:
+    """Every report, newest first.
+
+    Until now a report could only be reached through the distillation that
+    produced it — three screens deep, and unreachable at all if you had
+    forgotten which moment it came from. It is the most substantial thing this
+    app makes and it was the hardest thing to find.
+    """
+    import json as _json
+
+    db = await get_db()
+    try:
+        rows = await (
+            await db.execute(
+                """SELECT r.id, r.gist_id, r.episode_id, r.status, r.public_url,
+                          r.error, r.created_at, r.finished_at, r.report_json,
+                          e.title AS episode_title, s.title AS podcast_title
+                     FROM researches r
+                     LEFT JOIN episodes e      ON e.id = r.episode_id
+                     LEFT JOIN subscriptions s ON s.podcast_id = e.podcast_id
+                    ORDER BY r.created_at DESC"""
+            )
+        ).fetchall()
+    finally:
+        await db.close()
+
+    can_typeset = typeset.available()
+    out = []
+    for row in rows:
+        record = dict(row)
+        stored = record.pop("report_json", None)
+        claim, verdict, sources = "", "", 0
+        if stored:
+            try:
+                data = _json.loads(stored)
+                claim = data.get("claim") or ""
+                verdict = (data.get("report") or {}).get("verdict") or ""
+                sources = len(data.get("sources") or [])
+            except ValueError:
+                pass
+        out.append({
+            **record,
+            "claim": claim,
+            "verdict": verdict,
+            "sources": sources,
+            "markdown": bool(stored),
+            "pdf": bool(stored) and can_typeset,
+        })
+    return out
+
+
+@router.delete("/{gist_id}")
+async def delete_report(gist_id: str):
+    """Remove a report, and the files it wrote.
+
+    Deleting the row alone would leave the HTML and the PDF behind for good:
+    nothing else knows they exist, and the media retention pass only looks at
+    audio.
+    """
+    db = await get_db()
+    try:
+        rows = await (
+            await db.execute(
+                "SELECT id, file_path FROM researches WHERE gist_id = ?", (gist_id,)
+            )
+        ).fetchall()
+        if not rows:
+            raise HTTPException(404, "No report for this distillation")
+        for row in rows:
+            for path in (row["file_path"], str(Path(settings.reports_dir) / f"{row['id']}.pdf")):
+                if not path:
+                    continue
+                try:
+                    Path(path).unlink(missing_ok=True)
+                except OSError as exc:
+                    log.warning("could not remove %s: %s", path, exc)
+        await db.execute("DELETE FROM researches WHERE gist_id = ?", (gist_id,))
+        await db.commit()
+    finally:
+        await db.close()
+    return {"status": "deleted"}
 
 
 @router.post("/{gist_id}")

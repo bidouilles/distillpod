@@ -4,9 +4,10 @@ import SegmentedTabs from "../components/SegmentedTabs";
 import ShowsPanel from "./Subscriptions";
 import PlaylistsPanel from "../components/PlaylistsPanel";
 import StoragePanel from "../components/StoragePanel";
-import { listPlaylists, getSubscriptions } from "../api/client";
+import ReportsPanel from "../components/ReportsPanel";
+import { listPlaylists, listReports, getSubscriptions } from "../api/client";
 
-type Section = "shows" | "playlists" | "storage";
+type Section = "shows" | "playlists" | "reports" | "storage";
 
 /**
  * The library as a place rather than a list.
@@ -20,10 +21,10 @@ export default function Library() {
   const [params, setParams] = useSearchParams();
   const raw = params.get("tab");
   const section: Section =
-    raw === "playlists" || raw === "storage" ? raw : "shows";
+    raw === "playlists" || raw === "storage" || raw === "reports" ? raw : "shows";
 
-  const [counts, setCounts] = useState<{ shows: number; playlists: number }>({
-    shows: 0, playlists: 0,
+  const [counts, setCounts] = useState<{ shows: number; playlists: number; reports: number }>({
+    shows: 0, playlists: 0, reports: 0,
   });
 
   // Counts on the tabs, so the sections say how much is behind them before
@@ -31,6 +32,7 @@ export default function Library() {
   useEffect(() => {
     getSubscriptions().then(s => setCounts(c => ({ ...c, shows: s.length }))).catch(() => {});
     listPlaylists().then(p => setCounts(c => ({ ...c, playlists: p.length }))).catch(() => {});
+    listReports().then(r => setCounts(c => ({ ...c, reports: r.length }))).catch(() => {});
   }, [section]);
 
   return (
@@ -43,12 +45,14 @@ export default function Library() {
         segments={[
           { key: "shows",     label: "Shows",     badge: counts.shows },
           { key: "playlists", label: "Playlists", badge: counts.playlists },
+          { key: "reports",   label: "Reports",   badge: counts.reports },
           { key: "storage",   label: "Storage" },
         ]}
       />
 
       {section === "shows"     && <ShowsPanel embedded />}
       {section === "playlists" && <PlaylistsPanel />}
+      {section === "reports"   && <ReportsPanel />}
       {section === "storage"   && <StoragePanel />}
     </div>
   );

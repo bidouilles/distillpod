@@ -556,3 +556,90 @@ class TestPdfEndpoint:
         second = await client.get(f"/research/{GIST_ID}/pdf")
         assert second.status_code == 200
         assert len(calls) == 1, "typeset the same report twice"
+
+
+class TestReportsList:
+    """Reports were reachable only through the distillation that produced them,
+    and there was no way to delete one at all — the row and its files simply
+    accumulated."""
+
+    async def test_empty_to_begin_with(self, client):
+        assert (await client.get("/research")).json() == []
+
+    async def test_lists_newest_first_with_what_the_card_needs(self, client, tmp_db):
+        conn = sqlite3.connect(tmp_db)
+        for i, (rid, created) in enumerate([("r-old", "2026-01-01"), ("r-new", "2026-06-01")]):
+            conn.execute(
+                "INSERT INTO researches (id, gist_id, episode_id, status, public_url, "
+                "                        report_json, created_at) "
+                "VALUES (?, ?, ?, 'done', 'https://x/y.html', ?, ?)",
+                (rid, f"gist-{i}", EPISODE_ID_1,
+                 json.dumps({"claim": f"claim {i}",
+                             "report": {"verdict": "mixed"},
+                             "sources": [{"url": "https://a"}, {"url": "https://b"}]}),
+                 created))
+        conn.commit()
+        conn.close()
+
+        body = (await client.get("/research")).json()
+        assert [r["id"] for r in body] == ["r-new", "r-old"]
+        assert body[0]["claim"] == "claim 1"
+        assert body[0]["verdict"] == "mixed"
+        assert body[0]["sources"] == 2
+        assert body[0]["episode_title"] == "Episode One"
+        assert body[0]["podcast_title"] == "Test Podcast"
+
+    async def test_a_report_without_stored_structure_still_lists(self, client, tmp_db):
+        conn = sqlite3.connect(tmp_db)
+        conn.execute(
+            "INSERT INTO researches (id, gist_id, episode_id, status, created_at) "
+            "VALUES ('r-bare', 'g1', ?, 'done', '2026-01-01')", (EPISODE_ID_1,))
+        conn.commit()
+        conn.close()
+        row = (await client.get("/research")).json()[0]
+        assert row["claim"] == "" and row["markdown"] is False and row["pdf"] is False
+
+    async def test_a_failure_lists_with_its_reason(self, client, tmp_db):
+        conn = sqlite3.connect(tmp_db)
+        conn.execute(
+            "INSERT INTO researches (id, gist_id, episode_id, status, error, created_at) "
+            "VALUES ('r-bad', 'g2', ?, 'error', 'No web sources came back', '2026-01-01')",
+            (EPISODE_ID_1,))
+        conn.commit()
+        conn.close()
+        row = (await client.get("/research")).json()[0]
+        assert row["status"] == "error" and "No web sources" in row["error"]
+
+    async def test_deleting_takes_the_files_with_it(self, client, tmp_db, tmp_path, monkeypatch):
+        from config import settings
+        monkeypatch.setattr(settings, "reports_dir", tmp_path)
+        html = tmp_path / "r-del.html"
+        pdf = tmp_path / "r-del.pdf"
+        html.write_text("<html></html>")
+        pdf.write_bytes(b"%PDF")
+
+        conn = sqlite3.connect(tmp_db)
+        conn.execute(
+            "INSERT INTO researches (id, gist_id, episode_id, status, file_path, created_at) "
+            "VALUES ('r-del', ?, ?, 'done', ?, '2026-01-01')",
+            (GIST_ID, EPISODE_ID_1, str(html)))
+        conn.commit()
+        conn.close()
+
+        assert (await client.delete(f"/research/{GIST_ID}")).status_code == 200
+        assert (await client.get("/research")).json() == []
+        assert not html.exists(), "left the page behind"
+        assert not pdf.exists(), "left the PDF behind"
+
+    async def test_deleting_something_absent_is_a_404(self, client):
+        assert (await client.delete("/research/nope")).status_code == 404
+
+    async def test_the_distillation_survives_its_report(self, client, tmp_db):
+        conn = sqlite3.connect(tmp_db)
+        conn.execute(
+            "INSERT INTO researches (id, gist_id, episode_id, status, created_at) "
+            "VALUES ('r-x', ?, ?, 'done', '2026-01-01')", (GIST_ID, EPISODE_ID_1))
+        conn.commit()
+        conn.close()
+        await client.delete(f"/research/{GIST_ID}")
+        assert any(g["id"] == GIST_ID for g in (await client.get("/gists/")).json())

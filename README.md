@@ -589,7 +589,9 @@ nightly backlog, and the turn already in progress is the only thing it waits
 for. The nightly script is a separate process, so the turns are held through a
 lock file per lane that both processes see.
 
-Library → Storage shows what is running and what is queued.
+Library → Storage shows what is running and what is queued, and Library →
+Reports lists every research report — open, copy, typeset or delete, without
+having to remember which distilled moment produced it.
 
 ### Scheduled jobs
 
