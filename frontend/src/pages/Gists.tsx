@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { listGists, deleteGist, getSubscriptions, triggerResearch, getResearch, getResearchMarkdown, researchPdfUrl, Gist, Subscription, Research } from "../api/client";
 import { CopyButton, ShareButton, DownloadIcon } from "../components/ActionButtons";
 import { downloadText, slugify } from "../lib/clipboard";
+import { useSaved } from "../stores/savedStore";
 
 function fmtTime(secs: number) {
   const m = Math.floor(secs / 60);
@@ -338,7 +339,10 @@ export default function Gists({ embedded = false }: { embedded?: boolean }) {
     }).finally(() => setLoading(false));
   };
 
-  useEffect(() => { load(); }, []);
+  // Reloads when something is distilled elsewhere — the player can be open over
+  // this screen.
+  const distillsVersion = useSaved(s => s.distills);
+  useEffect(() => { load(); }, [distillsVersion]);
 
   // Group by episode
   const byEpisode = allGists.reduce<Record<string, Gist[]>>((acc, g) => {

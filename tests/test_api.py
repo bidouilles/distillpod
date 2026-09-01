@@ -655,3 +655,52 @@ class TestSubscriptionSource:
         subs = (await client.get("/podcasts/subscriptions")).json()
         row = next(s for s in subs if s["podcast_id"] == "yt-UConeoff")
         assert row["source"] == "youtube_channel"
+
+
+class TestGistOrdering:
+    """Within an episode, distillations are moments in one conversation and only
+    cohere in the order they were said. Ordering by when they were *made*
+    interleaved the nightly auto-snips with anything tapped later, so an episode
+    listed 0:00, 0:00, 24:34, 14:24 — which reads as a bug even though every
+    entry is correct."""
+
+    @pytest.mark.asyncio
+    async def test_within_an_episode_they_are_in_playback_order(self, client, tmp_db):
+        import sqlite3
+        conn = sqlite3.connect(tmp_db)
+        # Inserted out of order, as an auto-snip run followed by manual taps.
+        for gid, start, created in [
+            ("g-late", 1474.0, "2026-02-01T10:00:00"),
+            ("g-early", 0.0, "2026-02-01T12:00:00"),
+            ("g-mid", 864.0, "2026-02-01T11:00:00"),
+        ]:
+            conn.execute(
+                "INSERT INTO gists (id, episode_id, podcast_id, episode_title, "
+                "podcast_title, start_seconds, end_seconds, text, created_at) "
+                "VALUES (?, 'ep_001', 'pod_test_001', 'Episode One', 'Test Podcast', "
+                "        ?, ?, 'text', ?)",
+                (gid, start, start + 60, created))
+        conn.commit()
+        conn.close()
+
+        got = (await client.get("/gists/?episode_id=ep_001")).json()
+        starts = [g["start_seconds"] for g in got]
+        assert starts == sorted(starts), f"not in playback order: {starts}"
+
+    @pytest.mark.asyncio
+    async def test_across_the_library_it_is_newest_first(self, client, tmp_db):
+        """There the unit is "what did I keep recently", not "what happened when"."""
+        import sqlite3
+        conn = sqlite3.connect(tmp_db)
+        for gid, created in [("g-a", "2026-01-01T00:00:00"), ("g-b", "2026-03-01T00:00:00")]:
+            conn.execute(
+                "INSERT INTO gists (id, episode_id, podcast_id, episode_title, "
+                "podcast_title, start_seconds, end_seconds, text, created_at) "
+                "VALUES (?, 'ep_002', 'pod_test_001', 'Episode Two', 'Test Podcast', "
+                "        10, 70, 'text', ?)",
+                (gid, created))
+        conn.commit()
+        conn.close()
+
+        got = [g["id"] for g in (await client.get("/gists/")).json()]
+        assert got.index("g-b") < got.index("g-a")

@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import LiveTranscript from "./LiveTranscript";
 import { setActiveSource, useAudio } from "../context/AudioContext";
+import { useSaved } from "../stores/savedStore";
 import { fmtSaved, toCut, toOriginal } from "../lib/timeline";
 import {
   getTranscriptStatus, getAdFreeStatus, getChapters, createGist,
@@ -59,6 +60,9 @@ export default function FullscreenPlayer() {
   } = useAudio();
 
   const [sleepOpen, setSleepOpen]         = useState(false);
+  // Tell the screens that list these things; they are siblings of this one.
+  const distillSaved  = useSaved(s => s.distillSaved);
+  const bookmarkSaved = useSaved(s => s.bookmarkSaved);
   // Episode-specific data
   const [transcriptStatus, setTranscriptStatus] = useState("none");
   const [adFreeStatus, setAdFreeStatus]   = useState<AdFreeStatus | null>(null);
@@ -232,6 +236,7 @@ export default function FullscreenPlayer() {
       await createGist(
         episode.id, audioRef.current.currentTime, segments ? "clean" : "original",
       );
+      distillSaved();
       setGistFlash(true);
       setGistCreated(true);
       setTimeout(() => setGistFlash(false), 800);
@@ -253,6 +258,7 @@ export default function FullscreenPlayer() {
       await bookmarkMoment(
         episode.id, audioRef.current.currentTime, segments ? "clean" : "original",
       );
+      bookmarkSaved();
       setMarkCount(n => n + 1);
     } catch (e: any) {
       setError(
@@ -785,7 +791,7 @@ export default function FullscreenPlayer() {
               open={transcriptOpen}
               toOriginal={inOriginal}
               onSeek={(secs) => { const a = audioRef.current; if (a) a.currentTime = inThisFile(secs); }}
-              onBookmarked={() => setMarkCount(n => n + 1)}
+              onBookmarked={() => { bookmarkSaved(); setMarkCount(n => n + 1); }}
             />
           )}
         </div>

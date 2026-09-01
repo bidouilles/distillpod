@@ -11,6 +11,7 @@ import { CopyButton, ShareButton, DownloadIcon } from "../components/ActionButto
 import BookmarkList from "../components/BookmarkList";
 import AddToPlaylist from "../components/AddToPlaylist";
 import { useQueue, type QueueItem } from "../stores/queueStore";
+import { useSaved } from "../stores/savedStore";
 
 function stripHtml(html: string): string {
   return html.replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ").replace(/&#39;/g, "'").replace(/&quot;/g, '"').trim();
@@ -127,26 +128,14 @@ function GistCard({ gist, episodeTitle, podcastTitle }: {
  * are: the player is where they are made, so coming back from it is the moment
  * the list is out of date.
  */
-function BookmarksSection({ episodeId, playerExpanded }: {
-  episodeId?: string; playerExpanded: boolean;
-}) {
-  const [refreshKey, setRefreshKey] = useState(0);
-  const wasExpanded = useRef(playerExpanded);
-
-  useEffect(() => {
-    if (wasExpanded.current && !playerExpanded) setRefreshKey(k => k + 1);
-    wasExpanded.current = playerExpanded;
-  }, [playerExpanded]);
-
+function BookmarksSection({ episodeId }: { episodeId?: string }) {
+  // Re-read whenever one is kept, wherever it was kept from. This used to wait
+  // for the fullscreen player to close, so a bookmark taken while reading along
+  // did not appear until the page was reloaded.
+  const version = useSaved(s => s.bookmarks);
   if (!episodeId) return null;
-
   return (
-    <BookmarkList
-      episodeId={episodeId}
-      compact
-      refreshKey={refreshKey}
-      heading="🔖 Bookmarks"
-    />
+    <BookmarkList episodeId={episodeId} compact refreshKey={version} heading="🔖 Bookmarks" />
   );
 }
 
@@ -177,9 +166,6 @@ export default function Player() {
   const [loading, setLoading]         = useState(false);
   const [error, setError]             = useState("");
 
-  // Track previous playerExpanded to detect close → refresh gists
-  const prevExpandedRef = useRef(playerExpanded);
-
   // The best available episode data for display.
   // Normalise: when episode comes from getEpisode() directly, it has image_url but not
   // podcast_image — promote image_url so the hero artwork always renders.
@@ -202,11 +188,19 @@ export default function Player() {
   }, [episodeId]);
 
   // ── Fetch chapters + gists ────────────────────────────────────────────────
+  // Re-read the distills whenever one is made, from wherever: the fullscreen
+  // player is a sibling of this page and cannot tell it directly.
+  const distillsVersion = useSaved(s => s.distills);
+
   useEffect(() => {
     if (!episodeId) return;
     getChapters(episodeId).then(setChaptersData).catch(() => {});
-    listGists(episodeId).then(setGists).catch(() => {});
   }, [episodeId]);
+
+  useEffect(() => {
+    if (!episodeId) return;
+    listGists(episodeId).then(setGists).catch(() => {});
+  }, [episodeId, distillsVersion]);
 
   useEffect(() => () => { if (snipPoll.current) clearInterval(snipPoll.current); }, []);
 
@@ -280,14 +274,6 @@ export default function Player() {
       } catch { /* transient — keep polling */ }
     }, 5000);
   };
-
-  // ── Refresh gists when fullscreen player closes (user may have distilled) ─
-  useEffect(() => {
-    if (prevExpandedRef.current && !playerExpanded && episodeId) {
-      listGists(episodeId).then(setGists).catch(() => {});
-    }
-    prevExpandedRef.current = playerExpanded;
-  }, [playerExpanded, episodeId]);
 
   // ── Play handler ──────────────────────────────────────────────────────────
   const handlePlay = async () => {
@@ -655,7 +641,7 @@ export default function Player() {
 
         {/* Bookmarks. Above the distills because there are usually more of them:
             one costs a tap, a distillation costs a model call. */}
-        <BookmarksSection episodeId={episodeId} playerExpanded={playerExpanded} />
+        <BookmarksSection episodeId={episodeId} />
 
         {/* Distills */}
         {gists.length > 0 && (

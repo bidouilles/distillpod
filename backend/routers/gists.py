@@ -144,10 +144,22 @@ async def auto_snip_episode(episode_id: str):
 
 @router.get("/")
 async def list_gists(episode_id: str = None) -> list[Gist]:
+    """Distillations, in the order that makes sense for where they are shown.
+
+    Within an episode that is playback order: they are moments in one
+    conversation, and reading them in the order they were said is the only way
+    they cohere. Ordering by when they were *made* interleaved the nightly
+    auto-snips with anything tapped later, so an episode page listed 0:00,
+    0:00, 24:34, 14:24 — which reads as a bug even though every entry is right.
+
+    Across the library the useful order is the opposite: newest first, because
+    there the unit is "what did I keep recently", not "what happened when".
+    """
     db = await get_db()
     if episode_id:
         rows = await db.execute_fetchall(
-            "SELECT * FROM gists WHERE episode_id = ? ORDER BY created_at DESC", (episode_id,)
+            "SELECT * FROM gists WHERE episode_id = ? ORDER BY start_seconds ASC",
+            (episode_id,),
         )
     else:
         rows = await db.execute_fetchall("SELECT * FROM gists ORDER BY created_at DESC")

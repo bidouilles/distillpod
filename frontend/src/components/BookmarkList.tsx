@@ -4,6 +4,7 @@ import {
   annotateBookmark, deleteBookmark, listBookmarks, type Bookmark,
 } from "../api/client";
 import { CopyButton, ShareButton } from "./ActionButtons";
+import { useSaved } from "../stores/savedStore";
 
 /**
  * Bookmarks, across the library or within one episode.
@@ -38,6 +39,8 @@ export default function BookmarkList({
 }) {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [loading, setLoading] = useState(true);
+  // Kept anywhere — the player, a transcript line — shows up here.
+  const version = useSaved(s => s.bookmarks);
 
   const load = () => {
     listBookmarks(episodeId)
@@ -46,7 +49,7 @@ export default function BookmarkList({
       .finally(() => setLoading(false));
   };
 
-  useEffect(load, [episodeId, refreshKey]);
+  useEffect(load, [episodeId, refreshKey, version]);
 
   if (loading) {
     return <div className="space-y-2">
