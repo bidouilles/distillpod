@@ -519,9 +519,12 @@ async def episode_brief(episode_id: str):
 
         from services.note_builder import brief as build_brief
         loop = asyncio.get_event_loop()
-        summary = await loop.run_in_executor(
-            None, build_brief, transcript["words_json"], row["title"]
-        )
+        # Reaches the agent CLI through a thread, so it needs the lane on its
+        # own behalf — the async wrapper's is not in this path.
+        async with jobs.lane("llm", label=f"brief: {episode_id}"):
+            summary = await loop.run_in_executor(
+                None, build_brief, transcript["words_json"], row["title"]
+            )
         if summary:
             await db.execute(
                 "UPDATE episodes SET summary = ? WHERE id = ?", (summary, episode_id)
@@ -589,9 +592,10 @@ async def export_note(episode_id: str, enrich: bool = True):
                 if transcript:
                     from services.note_builder import enrich as build_extras
                     loop = asyncio.get_event_loop()
-                    extras = await loop.run_in_executor(
-                        None, build_extras, transcript["words_json"], episode["title"]
-                    )
+                    async with jobs.lane("llm", label=f"note: {episode_id}"):
+                        extras = await loop.run_in_executor(
+                            None, build_extras, transcript["words_json"], episode["title"]
+                        )
                     if extras:
                         await db.execute(
                             """INSERT OR REPLACE INTO episode_notes

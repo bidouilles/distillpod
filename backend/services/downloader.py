@@ -56,16 +56,19 @@ async def download_episode(episode_id: str, audio_url: str) -> Path:
                 # waits for this download rather than queueing another.
                 async with jobs.lane("media", label=f"download: {episode_id}",
                                      key=f"download:{episode_id}") as turn:
-                    if turn.duplicate:
-                        if dest.exists():
-                            return dest
-                    else:
-                        async with httpx.AsyncClient(follow_redirects=True, timeout=300) as client:
-                            async with client.stream("GET", audio_url) as r:
-                                r.raise_for_status()
-                                with open(part, "wb") as f:
-                                    async for chunk in r.aiter_bytes(chunk_size=65536):
-                                        f.write(chunk)
+                    # A duplicate waited for the original and returns its file.
+                    # If the original failed there is no file, and this turn
+                    # does the work rather than leaving both callers with
+                    # nothing — a shared job that failed must not be reported
+                    # as a job that succeeded.
+                    if turn.duplicate and dest.exists():
+                        return dest
+                    async with httpx.AsyncClient(follow_redirects=True, timeout=300) as client:
+                        async with client.stream("GET", audio_url) as r:
+                            r.raise_for_status()
+                            with open(part, "wb") as f:
+                                async for chunk in r.aiter_bytes(chunk_size=65536):
+                                    f.write(chunk)
             part.replace(dest)
         finally:
             part.unlink(missing_ok=True)

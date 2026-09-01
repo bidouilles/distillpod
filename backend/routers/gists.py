@@ -109,9 +109,13 @@ async def auto_snip_episode(episode_id: str):
 
     async def _run():
         try:
-            from services.auto_snipper import pick_snips, build_rows
+            from services import jobs
+            from services.auto_snipper import build_rows, pick_snips
             loop = asyncio.get_event_loop()
-            snips = await loop.run_in_executor(None, pick_snips, words_json)
+            # Reaches the agent CLI through a thread, so the lane has to be
+            # taken here — the async wrapper is not in this path.
+            async with jobs.lane("llm", label=f"suggest highlights: {episode_id}"):
+                snips = await loop.run_in_executor(None, pick_snips, words_json)
             if not snips:
                 return
             podcast_id, episode_title, podcast_title = meta

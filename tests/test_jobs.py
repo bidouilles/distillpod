@@ -419,3 +419,128 @@ class TestDeduplication:
             assert not turn.duplicate
         async with jobs.lane("media", label="second", key="k3") as turn:
             assert not turn.duplicate, "a finished job still blocked the next one"
+
+
+class TestSpacingRace:
+    """Spacing must not open a hole in the serialisation.
+
+    The winner used to leave the queue, wait out the spacing, and only then
+    claim the lane. For those seconds the lane looked free *and* empty, so the
+    next waiter proceeded too — and with YouTube spaced four seconds apart, that
+    is a four-second window in which two yt-dlp calls start at once, which is
+    the exact thing the lane exists to prevent.
+    """
+
+    async def test_only_one_turn_runs_while_spacing_elapses(self, monkeypatch):
+        # Longer than the waiters' poll interval, as the real 4s spacing is.
+        # A shorter gap hides the bug: the next waiter happens not to look
+        # until after the winner has claimed the lane.
+        monkeypatch.setattr(jobs, "SPACING", {"youtube": 0.6})
+        # No lock file either. The cross-process lock masked this by blocking
+        # the second turn in a worker thread — serialised, but by accident, and
+        # by consuming a thread the transcription it was waiting for needs.
+        monkeypatch.setattr(jobs, "_lock_dir", None)
+        concurrent = 0
+        peak = 0
+
+        async def turn(name):
+            nonlocal concurrent, peak
+            async with jobs.lane("youtube", label=name):
+                concurrent += 1
+                peak = max(peak, concurrent)
+                await asyncio.sleep(0.1)
+                concurrent -= 1
+
+        await asyncio.gather(*(turn(f"t{i}") for i in range(3)))
+        assert peak == 1, f"{peak} yt-dlp turns ran at once"
+
+    async def test_the_spacing_is_still_applied(self, monkeypatch):
+        monkeypatch.setattr(jobs, "SPACING", {"youtube": 0.15})
+        started: list[float] = []
+
+        async def turn():
+            async with jobs.lane("youtube", label="t"):
+                started.append(asyncio.get_event_loop().time())
+
+        await asyncio.gather(turn(), turn(), turn())
+        gaps = [b - a for a, b in zip(started, started[1:])]
+        assert all(g >= 0.14 for g in gaps), f"turns were not spaced: {gaps}"
+
+
+class TestDuplicateOfAFailedJob:
+    """Waiting on a shared job and then being told it is done is only right if
+    it actually finished. When the original fails, the duplicate has to do the
+    work rather than return nothing as though it had succeeded."""
+
+    async def test_the_second_caller_does_the_work_after_the_first_fails(self):
+        attempts: list[str] = []
+
+        async def attempt(who, fail):
+            async with jobs.lane("media", label=who, key="download:ep-9") as turn:
+                if turn.duplicate and "done" in attempts:
+                    return "reused"
+                attempts.append(who)
+                if fail:
+                    raise RuntimeError("network")
+                attempts.append("done")
+                return "downloaded"
+
+        async def first():
+            with pytest.raises(RuntimeError):
+                await attempt("first", fail=True)
+
+        async def second():
+            await asyncio.sleep(0.02)
+            return await attempt("second", fail=False)
+
+        _, outcome = await asyncio.gather(first(), second())
+        assert outcome == "downloaded", "gave up because a failed job had 'already done' it"
+        assert attempts[:1] == ["first"]
+
+
+class TestEveryModelCallTakesATurn:
+    """Wrapping `llm.arun_json` was not enough. Several callers reach the agent
+    CLI through `run_in_executor(llm.run_json, …)` instead, which the async
+    wrapper's lane never sees — ad detection, chapters, briefs and auto-snips
+    all took that path, so four model calls could run at once on two cores."""
+
+    async def test_ad_detection_holds_the_llm_lane(self, monkeypatch, tmp_path):
+        from services import transcriber
+
+        seen = {}
+
+        def detect(words_json):
+            seen["lane"] = jobs.status().get("llm", {}).get("running")
+            return []
+
+        monkeypatch.setattr("services.ad_detector.detect_ads", detect)
+
+        class FakeDb:
+            async def execute_fetchone(self, *a, **kw):
+                return {"trim_silence": None, "normalize_volume": None}
+
+            async def execute(self, *a, **kw):
+                return None
+
+            async def commit(self):
+                return None
+
+        await transcriber.build_clean_cut(FakeDb(), "ep-1", tmp_path / "a.mp3", "[]")
+        assert seen["lane"] == "ad detection: ep-1"
+
+    async def test_the_lane_is_released_afterwards(self, monkeypatch, tmp_path):
+        from services import transcriber
+        monkeypatch.setattr("services.ad_detector.detect_ads", lambda w: [])
+
+        class FakeDb:
+            async def execute_fetchone(self, *a, **kw):
+                return {"trim_silence": None, "normalize_volume": None}
+
+            async def execute(self, *a, **kw):
+                return None
+
+            async def commit(self):
+                return None
+
+        await transcriber.build_clean_cut(FakeDb(), "ep-1", tmp_path / "a.mp3", "[]")
+        assert jobs.status()["llm"]["running"] is None

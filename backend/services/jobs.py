@@ -251,15 +251,23 @@ async def lane(name: str, label: str = "", level: int | None = None, key: str | 
                     break
             await _wait_briefly(waiter)
 
-        this.waiting.remove(waiter)
-        gap = SPACING.get(name, DEFAULT_SPACING) - (time.time() - this.last_finished)
-        if gap > 0:
-            await asyncio.sleep(gap)
-
+        # Claim the lane *before* waiting out the spacing. Leaving the queue
+        # first and sleeping left the lane looking free and empty, so the next
+        # waiter took it too — and with YouTube spaced four seconds apart, that
+        # was a four-second window in which two yt-dlp calls started at once.
+        # The cross-process lock happened to paper over it by blocking the
+        # second one in a worker thread, which is both invisible and a way to
+        # exhaust the executor.
         this.busy = True
         this.current = waiter.label
         this.current_since = time.time()
         this.current_priority = level
+        this.waiting.remove(waiter)
+
+        gap = SPACING.get(name, DEFAULT_SPACING) - (time.time() - this.last_finished)
+        if gap > 0:
+            await asyncio.sleep(gap)
+            this.current_since = time.time()
         held_token = _held_by_task.set(already | {name})
         try:
             # The cross-process lock is taken in a thread: flock blocks, and

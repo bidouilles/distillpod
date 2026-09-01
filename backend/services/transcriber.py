@@ -186,18 +186,24 @@ async def build_clean_cut(db, episode_id: str, audio_path, words_json: str) -> d
     trim_silence = bool(row["trim_silence"]) if row and row["trim_silence"] is not None else False
     normalize = bool(row["normalize_volume"]) if row and row["normalize_volume"] is not None else False
 
-    ads = await loop.run_in_executor(None, detect_ads, words_json)
+    # A model call like any other: `detect_ads` reaches llm.run_json through a
+    # thread, which the async wrapper's lane never sees.
+    async with jobs.lane("llm", label=f"ad detection: {episode_id}"):
+        ads = await loop.run_in_executor(None, detect_ads, words_json)
 
     output = Path(audio_path).parent / f"{episode_id}_adfree.mp3"
     result = None
     if ads or trim_silence or normalize:
-        result = await loop.run_in_executor(
-            None,
-            lambda: audio_processor.process(
-                str(audio_path), str(output), ads=ads,
-                trim_silence=trim_silence, normalize=normalize,
-            ),
-        )
+        # An encode is minutes of CPU on a small box; it queues with the other
+        # media work rather than competing with a download.
+        async with jobs.lane("media", label=f"clean cut: {episode_id}"):
+            result = await loop.run_in_executor(
+                None,
+                lambda: audio_processor.process(
+                    str(audio_path), str(output), ads=ads,
+                    trim_silence=trim_silence, normalize=normalize,
+                ),
+            )
 
     await db.execute(
         """UPDATE episodes
