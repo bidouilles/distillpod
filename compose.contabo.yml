@@ -1,0 +1,47 @@
+# /home/admin/docker-servers/distillpod; proxy to http://172.17.0.1:8124.
+services:
+  distillpod:
+    build:
+      context: .
+      args:
+        INSTALL_LOCAL_STT: "false"
+    image: distillpod-contabo:local
+    ports:
+      - "127.0.0.1:8124:8124"
+      - "172.17.0.1:8124:8124"
+    env_file: .env
+    environment:
+      DB_PATH: /app/data/distillpod.db
+      MEDIA_DIR: /app/media
+      REPORTS_DIR: /app/reports
+      PUBLIC_URL: https://distillpod.privatelab.eu
+      FRONTEND_ORIGIN: https://distillpod.privatelab.eu
+      TEST_MODE: "false"
+      STT_BACKEND: voxtral
+      LLM_BIN: ""
+      YTDLP_BIN: ""
+      CODEX_HOME: /home/app/.codex
+    volumes:
+      - ./data:/app/data
+      - ./media:/app/media
+      - ./reports:/app/reports
+      - ./agent:/home/app/.codex
+      - ./cache:/home/app/.cache
+    read_only: true
+    tmpfs:
+      - /tmp:rw,size=1g,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8124/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

@@ -106,6 +106,9 @@ class Settings(BaseSettings):
     session_secret: str = ""
     # Separate read-only credential for external tools. Empty disables access.
     integration_api_key: str = ""
+    # Optional single-owner password login. Store only a salted scrypt hash.
+    login_username: str = "admin"
+    login_password_hash: str = ""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

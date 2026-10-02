@@ -6,6 +6,14 @@ backend/__pycache__
 __pycache__
 .git
 .env
+*.env
+.venv/
+venv/
+data/
+agent/
+secrets/
+archives/
+*.tar.gz
 media/
 reports/
 *.db

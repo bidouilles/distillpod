@@ -10,7 +10,7 @@ services:
       # Mount the agent CLI's credentials from the host (read-only).
       # For LLM_BACKEND=claude, point AGENT_CONFIG at ~/.claude and the
       # target at /root/.claude instead.
-      - ${AGENT_CONFIG:-~/.codex}:/root/.codex:ro
+      - ${AGENT_CONFIG:-~/.codex}:/home/app/.codex
     env_file:
       - .env
     environment:

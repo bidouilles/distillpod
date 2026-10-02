@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, type FormEvent } from "react";
 
 // ─── Slide data ───────────────────────────────────────────────────────────────
 
@@ -43,6 +43,41 @@ function GoogleLogo() {
 // ─── Login page ───────────────────────────────────────────────────────────────
 
 export default function Login() {
+  const [methods, setMethods] = useState<{ password: boolean; google: boolean } | null>(null);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    fetch("/auth/methods")
+      .then(async response => {
+        if (!response.ok) throw new Error("Could not load sign-in options.");
+        setMethods(await response.json());
+      })
+      .catch(() => setError("Could not load sign-in options. Please reload."));
+  }, []);
+
+  const signIn = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/auth/password", {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(typeof data.detail === "string" ? data.detail : "Sign-in failed.");
+      }
+      window.location.replace(window.location.pathname === "/unauthorized" ? "/" : window.location.pathname + window.location.search);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Could not connect. Please try again.");
+      setPassword("");
+    } finally {
+      setBusy(false);
+    }
+  };
   const isSharedLink = window.location.pathname.startsWith("/player/");
 
   const slides = isSharedLink
@@ -78,12 +113,12 @@ export default function Login() {
   return (
     // h-[100dvh] = dynamic viewport height (shrinks when mobile browser chrome hides)
     <div
-      className={`h-[100dvh] flex flex-col bg-gradient-to-b ${slide.bg} transition-all duration-500`}
+      className={`min-h-[100dvh] flex flex-col bg-gradient-to-b ${slide.bg} transition-all duration-500`}
       style={{ paddingBottom: "env(safe-area-inset-bottom)", paddingTop: "env(safe-area-inset-top)" }}
     >
       {/* ── Slide area (swipeable) ── */}
       <div
-        className="flex-1 flex flex-col items-center justify-center gap-6 px-10 select-none"
+        className="flex-1 flex flex-col items-center justify-center gap-6 px-10 py-8 select-none"
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
       >
@@ -135,7 +170,25 @@ export default function Login() {
           ))}
         </div>
 
-        {/* Google sign-in */}
+        {methods?.password && (
+          <form onSubmit={signIn} className="w-full max-w-sm flex flex-col gap-3">
+            <label htmlFor="login-username" className="text-sm text-gray-300">Username</label>
+            <input id="login-username" name="username" autoComplete="username" required maxLength={128}
+              value={username} onChange={event => setUsername(event.target.value)} disabled={busy}
+              className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+            <label htmlFor="login-password" className="text-sm text-gray-300">Password</label>
+            <input id="login-password" name="password" type="password" autoComplete="current-password" required maxLength={1024}
+              value={password} onChange={event => setPassword(event.target.value)} disabled={busy}
+              className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+            <button type="submit" disabled={busy}
+              className="w-full bg-indigo-500 text-white font-semibold py-3.5 rounded-xl hover:bg-indigo-400 disabled:opacity-60 transition-colors">
+              {busy ? "Signing in…" : "Sign in"}
+            </button>
+          </form>
+        )}
+        {error && <p role="alert" className="w-full max-w-sm text-sm text-red-300">{error}</p>}
+        {methods && !methods.password && !methods.google && <p className="text-gray-400 text-sm text-center">Browser sign-in has not been configured.</p>}
+        {methods?.google && (
         <button
           onClick={() => { window.location.href = "/auth/google"; }}
           className="w-full max-w-sm flex items-center justify-center gap-3 bg-white text-gray-800 font-semibold py-3.5 px-6 rounded-2xl shadow-xl hover:bg-gray-50 active:scale-95 transition-all"
@@ -143,6 +196,7 @@ export default function Login() {
           <GoogleLogo />
           Sign in with Google
         </button>
+        )}
 
 
       </div>

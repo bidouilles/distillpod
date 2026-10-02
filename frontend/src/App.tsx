@@ -16,7 +16,6 @@ import Player from "./pages/Player";
 import Saved from "./pages/Saved";
 import Chat from "./pages/Chat";
 import Login from "./pages/Login";
-import Unauthorized from "./pages/Unauthorized";
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 const HomeIcon = ({ active }: { active: boolean }) => (
@@ -241,7 +240,6 @@ export default function App() {
   }
 
   if (!user) {
-    if (window.location.pathname === "/unauthorized") return <Unauthorized />;
     return <Login />;
   }
 
