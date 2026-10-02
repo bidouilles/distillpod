@@ -7,9 +7,9 @@ services:
       - distillpod-data:/app/data
       - distillpod-media:/app/media
       - distillpod-reports:/app/reports
-      # Mount the agent CLI's credentials from the host (read-only).
+      # Mount the agent CLI's credentials; writable to permit token refresh.
       # For LLM_BACKEND=claude, point AGENT_CONFIG at ~/.claude and the
-      # target at /root/.claude instead.
+      # target at /home/app/.claude instead.
       - ${AGENT_CONFIG:-~/.codex}:/home/app/.codex
     env_file:
       - .env

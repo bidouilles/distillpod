@@ -43,7 +43,10 @@ COPY scripts/ /app/scripts/
 COPY --from=frontend-build /app/frontend/dist /app/frontend/dist
 
 # Create data directories
-RUN mkdir -p /app/media /app/reports /app/data
+# Build contexts may come from a private (umask 077) checkout. Keep code owned
+# by root but readable by the non-root runtime user.
+RUN chmod -R a+rX /app/backend /app/scripts /app/frontend && \
+    mkdir -p /app/media /app/reports /app/data
 RUN useradd --uid 1000 --create-home app && \
     mkdir -p /home/app/.codex && chown -R app:app /app/data /app/media /app/reports /home/app
 

@@ -41,7 +41,7 @@ mount permits normal credential refresh. Reports and playback paths in the copie
 SQLite backup are adjusted to container paths. The original server is unchanged.
 
 To retain the previous schedules, use the admin crontab with `docker compose exec -T`:
-feed sync at 06:00 UTC and suggestions at 09:00 UTC. Shared lane locks sit beside
+feed sync at 06:00 and suggestions at 09:00 in the host's Europe/Berlin time zone. Shared lane locks sit beside
 the SQLite file in `data/locks/`, so scheduled commands and interactive jobs take
 turns even though they run in different processes. Do not run both servers'
 nightly jobs long-term against copies of the same library if duplicate model/STT

@@ -8,6 +8,10 @@ __pycache__/
 media/
 logs/
 reports/
+data/
+agent/
+cache/
+secrets/
 .coverage
 frontend/dist/
 .env
