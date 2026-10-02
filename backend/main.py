@@ -7,7 +7,7 @@ from config import settings
 from database import init_db
 from routers import (
     podcasts, player, gists, tags, search, youtube,
-    queue, bookmarks, playlists, storage, ask,
+    queue, bookmarks, playlists, storage, ask, integrations,
 )
 from routers import auth as auth_router
 from routers.chat import router as chat_router
@@ -49,6 +49,7 @@ app.include_router(storage.router)
 app.include_router(ask.router)
 app.include_router(chat_router)
 app.include_router(research_router)
+app.include_router(integrations.router)
 
 # Research reports — explicit route before catch-all SPA
 @app.get("/reports/{filename}")

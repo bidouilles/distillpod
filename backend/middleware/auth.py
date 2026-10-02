@@ -1,4 +1,5 @@
 import time
+import secrets
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -18,6 +19,7 @@ from config import settings
 PROTECTED_PREFIXES = [
     "/gists", "/podcasts", "/player", "/chat", "/research", "/tags", "/search",
     "/youtube", "/queue", "/bookmarks", "/playlists", "/storage", "/ask",
+    "/integrations",
 ]
 
 
@@ -41,6 +43,27 @@ def verify_session_token(token: str) -> dict | None:
 
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        # This credential can only read the integration namespace, never use
+        # session-only routes or spend the model subscription. Even TEST_MODE
+        # must not accidentally open the external feed.
+        if request.url.path.startswith("/integrations"):
+            scheme, _, token = request.headers.get("authorization", "").partition(" ")
+            if not settings.integration_api_key:
+                response = JSONResponse({"detail": "Integration access is disabled"}, status_code=503)
+            elif scheme.lower() != "bearer" or not secrets.compare_digest(
+                token.encode(), settings.integration_api_key.encode()
+            ):
+                response = JSONResponse(
+                    {"detail": "Invalid or missing integration API key"}, status_code=401,
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            else:
+                response = await call_next(request)
+            response.headers["Cache-Control"] = "private, no-store"
+            vary = response.headers.get("Vary", "")
+            response.headers["Vary"] = f"{vary}, Authorization" if vary else "Authorization"
+            return response
+
         # TEST_MODE: bypass auth entirely — E2E only, never in prod
         if settings.test_mode:
             request.state.user = {

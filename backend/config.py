@@ -104,6 +104,8 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     allowed_emails: str = ""     # comma-separated allowlist
     session_secret: str = ""
+    # Separate read-only credential for external tools. Empty disables access.
+    integration_api_key: str = ""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

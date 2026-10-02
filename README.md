@@ -614,6 +614,13 @@ The daily sync pipeline per subscription:
 
 ---
 
+## External LLM and bot access
+
+External LLM tools and bots can read recent episodes, cached AI summaries,
+distillations, transcripts and research through a private read-only JSON API
+or RSS. Set `INTEGRATION_API_KEY` to enable it; see
+[setup, endpoints and bot examples](docs/integrations.md).
+
 ## Testing
 
 ### Backend (pytest)
