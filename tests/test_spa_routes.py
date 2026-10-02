@@ -84,3 +84,22 @@ def test_the_spa_catch_all_is_registered_last():
     """Ordering is what makes every other route reachable at all."""
     import main
     assert getattr(main.app.routes[-1], "path", None) == CATCH_ALL
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", [
+    "/%2e%2e/%2e%2e/README.md",
+    "/%2e%2e/%2e%2e/%2e%2e/etc/hostname",
+])
+async def test_static_files_cannot_escape_frontend_directory(client, path):
+    response = await client.get(path)
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Not found"
+
+
+@pytest.mark.asyncio
+async def test_image_proxy_requires_session(client, monkeypatch):
+    from config import settings
+    monkeypatch.setattr(settings, "test_mode", False)
+    response = await client.get("/proxy/image", params={"url": "http://127.0.0.1:8124/health"})
+    assert response.status_code == 401

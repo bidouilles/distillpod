@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -111,7 +111,9 @@ if frontend_dist.exists():
     }
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
-        candidate = frontend_dist / full_path
+        candidate = (frontend_dist / full_path).resolve()
+        if not candidate.is_relative_to(frontend_dist.resolve()):
+            raise HTTPException(status_code=404, detail="Not found")
         if candidate.exists() and candidate.is_file():
             mime = _EXTRA_TYPES.get(candidate.suffix.lower()) or mimetypes.guess_type(str(candidate))[0]
             return FileResponse(str(candidate), media_type=mime or "application/octet-stream")

@@ -19,7 +19,7 @@ from config import settings
 PROTECTED_PREFIXES = [
     "/gists", "/podcasts", "/player", "/chat", "/research", "/tags", "/search",
     "/youtube", "/queue", "/bookmarks", "/playlists", "/storage", "/ask",
-    "/integrations",
+    "/integrations", "/proxy",
 ]
 
 
