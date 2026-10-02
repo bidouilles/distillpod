@@ -25,7 +25,7 @@ services:
       - ./data:/app/data
       - ./media:/app/media
       - ./reports:/app/reports
-      - ./agent:/home/app/.codex
+      - ${AGENT_CONFIG:-./agent}:/home/app/.codex
       - ./cache:/home/app/.cache
     read_only: true
     tmpfs:

@@ -36,8 +36,10 @@ Hash time is O(N*r*p), memory O(N*r), with fixed parameters.
 
 The image includes ffmpeg, Codex, current yt-dlp and Deno, uses Voxtral instead of
 installing the CPU transcription stack, and includes the nightly scripts.
-Copied Codex credentials live only in `agent/`, never the image; the writable
-mount permits normal credential refresh. Reports and playback paths in the copied
+Set `AGENT_CONFIG=/home/admin/.codex` in `.env` to use Contabo's existing Codex
+login, or leave it unset to use the private `agent/` directory. Credentials are
+never part of the image; the writable mount permits normal credential refresh.
+Reports and playback paths in the copied
 SQLite backup are adjusted to container paths. The original server is unchanged.
 
 To retain the previous schedules, use the admin crontab with `docker compose exec -T`:
