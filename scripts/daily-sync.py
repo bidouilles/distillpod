@@ -182,6 +182,10 @@ async def process_subscription(podcast_id: str, feed_url: str, title: str) -> di
             else:
                 transcript_status = row["transcript_status"]
 
+            await db.execute("UPDATE episodes SET transcript_sources = ? WHERE id = ?",
+                             (ep.transcript_sources, ep.id))
+            await db.commit()
+
             # Skip if already transcribed
             if transcript_status in ("processing", "queued"):
                 # The app is on it — a listener pressed play. Transcribing it
@@ -236,22 +240,8 @@ async def process_subscription(podcast_id: str, feed_url: str, title: str) -> di
             # --- Transcribe ---
             log.info(f"  🎙  Transcribing: {ep.title[:70]}")
             try:
-                loop = asyncio.get_event_loop()
-                from services import jobs as _jobs
-                async with _jobs.lane("stt", label=f"nightly transcribe: {ep.title[:40]}"):
-                    words = await loop.run_in_executor(None, stt.transcribe, str(local_path))
-
-                await db.execute(
-                    """INSERT OR REPLACE INTO transcripts
-                       (episode_id, words_json, language, created_at)
-                       VALUES (?, ?, 'auto', ?)""",
-                    (ep.id, json.dumps(words), datetime.now(timezone.utc).isoformat()),
-                )
-                await db.execute(
-                    "UPDATE episodes SET transcript_status = 'done' WHERE id = ?",
-                    (ep.id,),
-                )
-                await db.commit()
+                from services.transcriber import obtain_words
+                words, language = await obtain_words(ep.id, local_path)
                 stats["transcribed"] += 1
                 log.info(f"  ✓  Done: {ep.title[:70]}")
 

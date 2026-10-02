@@ -301,6 +301,8 @@ async def _insert_episodes(podcast_id: str, episodes: list) -> int:
                  ep.duration_seconds,
                  ep.published_at.isoformat() if ep.published_at else None, ep.image_url),
             )
+            await db.execute("UPDATE episodes SET transcript_sources = ? WHERE id = ?",
+                             (ep.transcript_sources, ep.id))
         await db.commit()
         after = (await db.execute_fetchone(
             "SELECT COUNT(*) AS n FROM episodes WHERE podcast_id = ?", (podcast_id,)
@@ -531,6 +533,8 @@ async def get_episodes(podcast_id: str, refresh: bool = False, limit: int = 100,
                     (ep.id, ep.podcast_id, ep.title, ep.description, ep.audio_url,
                      ep.duration_seconds, ep.published_at.isoformat() if ep.published_at else None, ep.image_url),
                 )
+                await db.execute("UPDATE episodes SET transcript_sources = ? WHERE id = ?",
+                                 (ep.transcript_sources, ep.id))
             await db.commit()
 
         # Bug 8: Paginate — cap at 500, default 100

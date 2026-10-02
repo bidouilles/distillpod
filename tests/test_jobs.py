@@ -246,7 +246,7 @@ class TestCaptionsFirst:
         words, _ = await transcriber._obtain_words("yt-abc123", tmp_path / "a.mp3")
         assert words[0]["word"] == " spoken"
 
-    async def test_a_refused_caption_fetch_falls_back_rather_than_failing(
+    async def test_a_refused_caption_fetch_does_not_trigger_speech_to_text(
         self, monkeypatch, tmp_path,
     ):
         from services import transcriber
@@ -256,18 +256,20 @@ class TestCaptionsFirst:
 
         monkeypatch.setattr(transcriber.youtube, "fetch_metadata", fake_metadata)
         monkeypatch.setattr(transcriber.stt, "transcribe",
-                            lambda path: [{"word": " spoken", "start": 0.0, "end": 0.5}])
-        words, _ = await transcriber._obtain_words("yt-abc123", tmp_path / "a.mp3")
-        assert words, "a throttled caption fetch lost the episode entirely"
+                            lambda path: pytest.fail("caption failure triggered speech-to-text"))
+        with pytest.raises(RuntimeError, match="429"):
+            await transcriber._obtain_words("yt-abc123", tmp_path / "a.mp3")
 
     async def test_a_podcast_goes_straight_to_speech_to_text(self, monkeypatch, tmp_path):
-        """Only YouTube episodes have captions to try."""
+        """A podcast without publisher transcripts needs speech-to-text."""
         from services import transcriber
 
         async def fetch(url):
             pytest.fail("asked YouTube about a podcast episode")
 
         monkeypatch.setattr(transcriber.youtube, "fetch_metadata", fetch)
+        from unittest.mock import AsyncMock
+        monkeypatch.setattr(transcriber.podcast_transcripts, "obtain", AsyncMock(return_value=([], "")))
         monkeypatch.setattr(transcriber.stt, "transcribe",
                             lambda path: [{"word": " spoken", "start": 0.0, "end": 0.5}])
         words, _ = await transcriber._obtain_words("ep_001", tmp_path / "a.mp3")

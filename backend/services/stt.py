@@ -256,6 +256,7 @@ def _get_model():
             settings.whisper_model,
             device=settings.whisper_device,
             compute_type="int8",
+            cpu_threads=max(1, settings.whisper_cpu_threads),
         )
     return _model
 

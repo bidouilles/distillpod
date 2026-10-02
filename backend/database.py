@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS episodes (
     downloaded        INTEGER DEFAULT 0,
     local_path        TEXT,
     transcript_status TEXT DEFAULT 'none',
+    transcript_sources TEXT,
     -- When this row appeared, which is not when the episode was published: a
     -- channel import backfills years of uploads at once. The inbox counts what
     -- arrived, so it has to ask the first question, not the second.
@@ -273,6 +274,7 @@ async def init_db():
         await db.commit()
         # Migrations: add columns if they don't exist yet
         for alter in [
+            'ALTER TABLE episodes ADD COLUMN transcript_sources TEXT',
             'ALTER TABLE episodes ADD COLUMN adfree_path TEXT',
             'ALTER TABLE episodes ADD COLUMN ads_detected INTEGER',
             'ALTER TABLE episodes ADD COLUMN summary TEXT',

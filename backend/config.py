@@ -97,6 +97,7 @@ class Settings(BaseSettings):
     # faster-whisper only. CTranslate2 has no Metal backend, so on macOS this
     # can only ever be "cpu" — use STT_BACKEND=mlx for the GPU there.
     whisper_device: str = "cpu"
+    whisper_cpu_threads: int = 3  # leave CPU capacity for the web app and other services
     gist_context_seconds: int = 60        # seconds of audio captured per shot
 
     # Auth — Google OAuth

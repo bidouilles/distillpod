@@ -1,9 +1,28 @@
 """RSS feed parser — extracts episodes from podcast feeds."""
 import feedparser
 import httpx
+import json
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from models import Episode
 from ids import safe_episode_id
+
+
+def transcript_links(content: str) -> dict[str, list[dict[str, str]]]:
+    """Read all Podcasting 2.0 links; feedparser keeps only the last tag."""
+    root = ET.fromstring(content)
+    result = {}
+    for item in root.iter("item"):
+        guid = item.findtext("guid")
+        enclosure = item.find("enclosure")
+        audio = enclosure.get("url") if enclosure is not None else None
+        if not (guid or audio):
+            continue
+        links = [dict(tag.attrib) for tag in item.findall(
+            "{https://podcastindex.org/namespace/1.0}transcript"
+        )]
+        result[safe_episode_id(guid or audio)] = links
+    return result
 
 
 async def fetch_episodes(feed_url: str, podcast_id: str, limit: int = 50) -> list[Episode]:
@@ -13,6 +32,10 @@ async def fetch_episodes(feed_url: str, podcast_id: str, limit: int = 50) -> lis
         content = r.text
 
     feed = feedparser.parse(content)
+    try:
+        sources = transcript_links(content)
+    except ET.ParseError:
+        sources = {}  # unknown, rather than claiming that a broken feed has no links
     episodes = []
 
     for entry in feed.entries[:limit]:
@@ -55,6 +78,8 @@ async def fetch_episodes(feed_url: str, podcast_id: str, limit: int = 50) -> lis
             duration_seconds=duration,
             published_at=published_at,
             image_url=entry.get("image", {}).get("href"),
+            transcript_sources=json.dumps(sources[safe_episode_id(entry.get("id", audio_url))])
+                if safe_episode_id(entry.get("id", audio_url)) in sources else None,
         ))
 
     return episodes

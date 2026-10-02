@@ -4,7 +4,7 @@ services:
     build:
       context: .
       args:
-        INSTALL_LOCAL_STT: "false"
+        INSTALL_LOCAL_STT: "true"
     image: distillpod-contabo:local
     ports:
       - "127.0.0.1:8124:8124"
@@ -17,7 +17,10 @@ services:
       PUBLIC_URL: https://distillpod.privatelab.eu
       FRONTEND_ORIGIN: https://distillpod.privatelab.eu
       TEST_MODE: "false"
-      STT_BACKEND: voxtral
+      STT_BACKEND: whisper
+      WHISPER_MODEL: small
+      WHISPER_DEVICE: cpu
+      WHISPER_CPU_THREADS: "3"
       LLM_BIN: ""
       YTDLP_BIN: ""
       CODEX_HOME: /home/app/.codex

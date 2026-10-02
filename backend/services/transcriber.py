@@ -16,7 +16,7 @@ from typing import Optional
 import aiosqlite
 from config import settings
 from database import get_db, index_transcript
-from services import jobs, stt, youtube
+from services import jobs, stt, youtube, podcast_transcripts
 
 log = logging.getLogger(__name__)
 
@@ -60,8 +60,8 @@ async def transcribe_episode(episode_id: str, audio_path: Path) -> None:
         )
         await db.commit()
 
-        words, language = await _obtain_words(episode_id, audio_path)
-        words_json = await store_transcript(db, episode_id, words, language=language)
+        words, language = await obtain_words(episode_id, audio_path)
+        words_json = json.dumps(words)
 
         # ── Meaning-based search index ───────────────────────────────────────
         # Straight after the transcript, so an episode is searchable by meaning
@@ -94,45 +94,47 @@ async def transcribe_episode(episode_id: str, audio_path: Path) -> None:
         await db.close()
 
 
-async def _obtain_words(episode_id: str, audio_path: Path) -> tuple[list[dict], str]:
-    """The transcript for an episode, by the cheapest route that works.
-
-    For a YouTube video, that is its own captions: they carry a timestamp per
-    word, cost nothing, arrive in seconds, and are what the ingest path already
-    prefers. Only the play path skipped them — so pressing play on a captioned
-    video sent it to a paid speech-to-text backend to re-derive, at length, a
-    transcript YouTube would have handed over for free. Every video whose
-    captions the nightly pass had not reached took that route.
-
-    Speech-to-text remains the fallback, which is the whole point of having it:
-    a video with no captions still gets a transcript, and so does every podcast.
-    """
-    if episode_id.startswith("yt-"):
+async def obtain_words(episode_id: str, audio_path: Path) -> tuple[list[dict], str]:
+    """Check and persist under one cross-process turn, including the INSERT."""
+    async with jobs.lane("stt", label=f"transcript: {episode_id}"):
+        stored = await _stored_words(episode_id)
+        if stored:
+            words, language = stored, ""
+        else:
+            words, language = await _obtain_words(episode_id, audio_path)
+        db = await get_db()
         try:
-            async with jobs.lane("youtube", label=f"captions: {episode_id}"):
-                meta = await youtube.fetch_metadata(_video_url(episode_id))
-                words = await youtube.fetch_caption_words(meta)
-            if words:
-                log.info("%s: transcribed from captions (%d words)", episode_id, len(words))
-                return words, youtube.caption_language(meta)
-            log.info("%s: no captions, falling back to speech-to-text", episode_id)
-        except Exception as exc:
-            # A refused or missing caption fetch is not fatal: speech-to-text
-            # can still do it, which is exactly the case it exists for.
-            log.info("%s: caption fetch failed (%s), falling back to speech-to-text",
-                     episode_id, exc)
-
-    # Keyed: the same episode asked for twice is transcribed once. That matters
-    # more here than anywhere else — a duplicate is a second bill.
-    async with jobs.lane("stt", label=f"transcribe: {episode_id}",
-                         key=f"stt:{episode_id}") as turn:
-        if turn.duplicate:
-            stored = await _stored_words(episode_id)
             if stored:
-                return stored, ""
-        loop = asyncio.get_event_loop()
-        # Off the event loop: CPU-bound for whisper, a long HTTP call for voxtral
-        return await loop.run_in_executor(None, stt.transcribe, str(audio_path)), ""
+                row = await db.execute_fetchone(
+                    "SELECT language FROM transcripts WHERE episode_id = ?", (episode_id,))
+                language = row["language"] or "" if row else ""
+                await db.execute("UPDATE episodes SET transcript_status = 'done' WHERE id = ?",
+                                 (episode_id,))
+                await db.commit()
+            else:
+                await store_transcript(db, episode_id, words, language=language)
+        finally:
+            await db.close()
+        return words, language
+
+
+async def _obtain_words(episode_id: str, audio_path: Path) -> tuple[list[dict], str]:
+    """Only a confirmed absence of source transcripts permits speech-to-text."""
+    if episode_id.startswith("yt-"):
+        async with jobs.lane("youtube", label=f"captions: {episode_id}"):
+            meta = await youtube.fetch_metadata(_video_url(episode_id))
+            words = await youtube.fetch_caption_words(meta)
+        if words:
+            return words, youtube.caption_language(meta)
+    else:
+        async with jobs.lane("web", label=f"publisher transcript: {episode_id}"):
+            words, language = await podcast_transcripts.obtain(episode_id)
+        if words:
+            return words, language
+
+    log.info("%s: no source transcript; using %s", episode_id, settings.stt)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, stt.transcribe, str(audio_path)), ""
 
 
 async def _stored_words(episode_id: str) -> list[dict]:

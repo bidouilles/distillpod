@@ -27,6 +27,7 @@ class Episode(BaseModel):
     downloaded: bool = False
     local_path: Optional[str] = None
     transcript_status: str = "none"   # none | queued | processing | done | error
+    transcript_sources: Optional[str] = None  # RSS links as JSON; NULL = not checked
     adfree_path: Optional[str] = None
     ads_detected: Optional[int] = None
     # JSON keep-list mapping the clean cut back onto the original timeline.

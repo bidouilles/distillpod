@@ -34,8 +34,25 @@ single-owner deployment with one worker; multiple workers require a shared rate
 limiter. Invalid origins, oversized input and incorrect credentials are rejected.
 Hash time is O(N*r*p), memory O(N*r), with fixed parameters.
 
-The image includes ffmpeg, Codex, current yt-dlp and Deno, uses Voxtral instead of
-installing the CPU transcription stack, and includes the nightly scripts.
+The image includes ffmpeg, Codex, current yt-dlp, Deno and faster-whisper.
+Transcription uses the multilingual `small` model on CPU with INT8 weights and
+three threads. Model files persist in `cache/`; the first use downloads them.
+`MISTRAL_API_KEY` does not select Voxtral because Compose explicitly sets
+`STT_BACKEND=whisper`. Other Mistral-backed features retain their own settings.
+
+Playback and nightly podcast sync reuse stored transcripts, then try source
+transcripts before speech-to-text. Podcasting 2.0 RSS transcript links support
+VTT, SRT and JSON (`segments` with `startTime`, `endTime`, `body`). Cue-level
+timestamps are distributed across words, so word timing is approximate.
+Missing source links permit local STT; fetch failures, missing RSS entries,
+untimed text/HTML-only transcripts and invalid timecodes report an error instead
+of silently running STT. Retry after a transient fetch failure. This discovers
+RSS-advertised transcripts, not arbitrary publisher web pages. YouTube caption
+fetch failures likewise remain errors; genuinely captionless videos use local
+STT on playback. Tests: `tests/test_podcast_transcripts.py`, `tests/test_jobs.py`.
+Parsing costs O(input bytes + words log words), memory O(input bytes + words),
+with an 8 MiB publisher download bound. One cross-process STT lane protects
+the check, computation and transcript write, preventing duplicate work.
 Set `AGENT_CONFIG=/home/admin/.codex` in `.env` to use Contabo's existing Codex
 login, or leave it unset to use the private `agent/` directory. Credentials are
 never part of the image; the writable mount permits normal credential refresh.
