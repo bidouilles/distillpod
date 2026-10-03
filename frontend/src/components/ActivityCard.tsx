@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { getBackgroundJobs, type LaneStatus } from "../api/client";
+import TranscriptionStatus, { useTranscription } from "./TranscriptionStatus";
+
+function ActiveTranscript({ id, title }: { id: string; title: string }) {
+  const state = useTranscription(id);
+  return <div><a className="text-xs text-indigo-300" href={`/player/${id}`}>{title}</a>
+    <TranscriptionStatus state={state} /></div>;
+}
 
 /**
  * What the server is working on right now.
@@ -23,6 +30,7 @@ const PRIORITY: Record<string, { label: string; className: string }> = {
   user:        { label: "you're waiting", className: "bg-indigo-600/25 text-indigo-300" },
   interactive: { label: "you asked", className: "bg-indigo-600/15 text-indigo-300/80" },
   background:  { label: "housekeeping", className: "bg-gray-800 text-gray-500" },
+  external:    { label: "server job", className: "bg-gray-800 text-gray-400" },
 };
 
 function fmtElapsed(seconds: number) {
@@ -88,7 +96,7 @@ export default function ActivityCard() {
                   )}
                 </div>
 
-                {lane.running ? (
+                {lane.transcripts?.length ? null : lane.running ? (
                   <div className="flex items-center gap-2 text-xs text-gray-400">
                     <span className="w-2.5 h-2.5 border-2 border-gray-700 border-t-indigo-400 rounded-full animate-spin inline-block flex-shrink-0" />
                     <span className="truncate">{lane.running}</span>
@@ -103,6 +111,7 @@ export default function ActivityCard() {
                     {lane.queue.length > 0 && <> — next: {lane.queue[0]}</>}
                   </div>
                 )}
+                {lane.transcripts?.map(t => <ActiveTranscript key={t.episode_id} id={t.episode_id} title={t.title} />)}
               </div>
             );
           })}

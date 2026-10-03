@@ -168,7 +168,9 @@ def _cross_process(name: str):
             except OSError as exc:
                 if exc.errno not in (errno.EAGAIN, errno.EACCES):
                     raise
-                if time.time() > deadline:
+                # Local transcription legitimately lasts well over two minutes.
+                # Never start a second STT process just because the first is slow.
+                if name != "stt" and time.time() > deadline:
                     log.warning(
                         "lane %s still locked after %.0fs; proceeding unserialised",
                         name, LOCK_WAIT_CEILING,
@@ -191,6 +193,22 @@ def _cross_process(name: str):
 
 def priority() -> int:
     return _priority.get()
+
+
+def externally_locked(name: str) -> bool:
+    """A live lock survives process boundaries and disappears on process exit."""
+    if _lock_dir is None:
+        return False
+    try:
+        with open(_lock_dir / f"{name}.lock", "a") as handle:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(handle, fcntl.LOCK_UN)
+    except OSError:
+        return False
+    return False
 
 
 @contextlib.contextmanager

@@ -126,14 +126,23 @@ export interface LaneStatus {
   waiting: number;
   queue: string[];
   completed: number;
+  transcripts?: { episode_id: string; title: string; status: string }[];
 }
 
 /** What the server is working on, per resource. */
 export const getBackgroundJobs = () =>
   req<Record<string, LaneStatus>>("GET", "/player/jobs");
 
+export interface TranscriptionStatus {
+  status: string;
+  progress_percent: number | null;
+  stage: string | null;
+  error: string | null;
+}
 export const getTranscriptStatus = (episodeId: string) =>
-  req<{ status: string }>("GET", `/player/transcript-status/${episodeId}`);
+  req<TranscriptionStatus>("GET", `/player/transcript-status/${episodeId}`);
+export const retryTranscription = (episodeId: string) =>
+  req<{status: string}>("POST", `/player/transcribe/${episodeId}`);
 
 export const getEpisode = (episodeId: string) =>
   req<Episode>("GET", `/player/episode/${episodeId}`);

@@ -242,7 +242,7 @@ class TestCaptionsFirst:
         monkeypatch.setattr(transcriber.youtube, "fetch_metadata", fake_metadata)
         monkeypatch.setattr(transcriber.youtube, "fetch_caption_words", no_captions)
         monkeypatch.setattr(transcriber.stt, "transcribe",
-                            lambda path: [{"word": " spoken", "start": 0.0, "end": 0.5}])
+                            lambda path, **kwargs: [{"word": " spoken", "start": 0.0, "end": 0.5}])
         words, _ = await transcriber._obtain_words("yt-abc123", tmp_path / "a.mp3")
         assert words[0]["word"] == " spoken"
 
@@ -271,7 +271,7 @@ class TestCaptionsFirst:
         from unittest.mock import AsyncMock
         monkeypatch.setattr(transcriber.podcast_transcripts, "obtain", AsyncMock(return_value=([], "")))
         monkeypatch.setattr(transcriber.stt, "transcribe",
-                            lambda path: [{"word": " spoken", "start": 0.0, "end": 0.5}])
+                            lambda path, **kwargs: [{"word": " spoken", "start": 0.0, "end": 0.5}])
         words, _ = await transcriber._obtain_words("ep_001", tmp_path / "a.mp3")
         assert words
 
@@ -303,6 +303,19 @@ class TestLockRobustness:
 
         fcntl.flock(stuck, fcntl.LOCK_UN)
         stuck.close()
+
+    async def test_long_transcription_does_not_bypass_the_shared_lock(self, tmp_path, monkeypatch):
+        import fcntl
+        jobs.set_lock_dir(tmp_path)
+        stuck = open(tmp_path / "stt.lock", "w")
+        fcntl.flock(stuck, fcntl.LOCK_EX)
+        monkeypatch.setattr(jobs, "LOCK_WAIT_CEILING", 0.01)
+        task = asyncio.create_task(hold("stt", "next", []))
+        await asyncio.sleep(0.6)
+        assert not task.done()
+        fcntl.flock(stuck, fcntl.LOCK_UN)
+        stuck.close()
+        await asyncio.wait_for(task, timeout=2)
 
 
 class TestNesting:

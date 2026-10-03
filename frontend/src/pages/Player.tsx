@@ -12,6 +12,7 @@ import BookmarkList from "../components/BookmarkList";
 import AddToPlaylist from "../components/AddToPlaylist";
 import { useQueue, type QueueItem } from "../stores/queueStore";
 import { useSaved } from "../stores/savedStore";
+import TranscriptionStatus, { useTranscription } from "../components/TranscriptionStatus";
 
 function stripHtml(html: string): string {
   return html.replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ").replace(/&#39;/g, "'").replace(/&quot;/g, '"').trim();
@@ -141,6 +142,7 @@ function BookmarksSection({ episodeId }: { episodeId?: string }) {
 
 export default function Player() {
   const { episodeId }  = useParams<{ episodeId: string }>();
+  const transcription = useTranscription(episodeId);
   const location       = useLocation();
   const navigate       = useNavigate();
   const routeState     = location.state as (PlayableEpisode & { seekTo?: number }) | null;
@@ -171,7 +173,8 @@ export default function Player() {
   // podcast_image — promote image_url so the hero artwork always renders.
   const rawDisplay: PlayableEpisode | null = episode?.id === episodeId ? episode : episodeInfo;
   const displayEpisode: PlayableEpisode | null = rawDisplay
-    ? { ...rawDisplay, podcast_image: rawDisplay.podcast_image ?? rawDisplay.image_url }
+    ? { ...rawDisplay, podcast_image: rawDisplay.podcast_image ?? rawDisplay.image_url,
+        transcript_status: transcription.data?.status ?? rawDisplay.transcript_status }
     : null;
 
   const isThisEpisode = episode?.id === episodeId && audioReady;
@@ -507,6 +510,7 @@ export default function Player() {
       )}
 
       {/* Chat button (only when episode is loaded and transcript exists) */}
+      <div className="mb-4"><TranscriptionStatus state={transcription} /></div>
       <button
         onClick={() => navigate(`/player/${episodeId}/chat`, {
           state: { episodeTitle: displayEpisode?.title }

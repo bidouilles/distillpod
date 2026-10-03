@@ -76,7 +76,7 @@ async def test_publisher_transcript_prevents_stt_and_is_searchable(client, monke
 async def test_parallel_requests_run_stt_once(client, monkeypatch, tmp_path):
     await set_sources([])
     calls = []
-    def transcribe(_):
+    def transcribe(_, **kwargs):
         calls.append(1)
         return [{"word": " hello", "start": 0, "end": 1}]
     monkeypatch.setattr(transcriber.stt, "transcribe", transcribe)
@@ -119,3 +119,27 @@ async def test_unknown_source_is_discovered_before_stt(client, monkeypatch):
 async def test_private_transcript_urls_are_rejected(url):
     with pytest.raises(ValueError):
         await publisher._public_url(url)
+
+
+@pytest.mark.asyncio
+async def test_failed_recreation_preserves_existing_transcript(client, monkeypatch, tmp_path):
+    old = [{"word":" original", "start":0, "end":1}]
+    db = await get_db()
+    try:
+        await transcriber.store_transcript(db, "ep_001", old)
+    finally:
+        await db.close()
+    await set_sources([])
+    def fail(*args, **kwargs):
+        raise RuntimeError("Model download failed")
+    monkeypatch.setattr(transcriber.stt, "transcribe", fail)
+    jobs.reset()
+    jobs.set_lock_dir(tmp_path)
+    try:
+        with pytest.raises(RuntimeError, match="download failed"):
+            await transcriber.obtain_words("ep_001", Path("unused"), force=True)
+        assert await transcriber._stored_words("ep_001") == old
+        response = (await client.get("/player/transcript-status/ep_001")).json()
+        assert response["status"] == "error" and "download failed" in response["error"]
+    finally:
+        jobs.reset()

@@ -231,7 +231,7 @@ async def process_subscription(podcast_id: str, feed_url: str, title: str) -> di
                 continue
 
             await db.execute(
-                "UPDATE episodes SET downloaded = 1, local_path = ?, transcript_status = 'processing' WHERE id = ?",
+                "UPDATE episodes SET downloaded = 1, local_path = ?, transcript_status = 'queued' WHERE id = ?",
                 (str(local_path), ep.id),
             )
             await db.commit()
@@ -247,11 +247,8 @@ async def process_subscription(podcast_id: str, feed_url: str, title: str) -> di
 
             except Exception as e:
                 log.error(f"  Transcription failed: {e}")
-                await db.execute(
-                    "UPDATE episodes SET transcript_status = 'error' WHERE id = ?",
-                    (ep.id,),
-                )
-                await db.commit()
+                from services import transcription_state
+                await transcription_state.update(ep.id, "error", "Transcription failed", str(e))
 
         # The clean cut: ads out, and pauses shortened or loudness levelled where
         # the podcast asks for it. Shares one implementation with the first-play

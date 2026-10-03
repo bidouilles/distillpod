@@ -2,21 +2,22 @@
 Episode transcription orchestration: get word-level timestamps by the cheapest
 route that works, store them, then build the clean cut and the search index.
 
-Two routes, in that order. A YouTube video's own captions carry a timestamp per
-word, cost nothing and arrive in seconds; speech-to-text is the fallback, which
-is the case it exists for. The transcription itself lives in services/stt.py —
-this module only cares that it gets back [{word, start, end}, ...].
+Reuse stored words, then try YouTube captions or RSS-linked publisher
+transcripts. Only a confirmed absence permits speech-to-text. Source failures
+remain retryable errors. STT lives in services/stt.py; every route produces
+[{word, start, end}, ...] on the original audio timeline.
 """
 import asyncio
 import json
 import logging
+from functools import partial
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 import aiosqlite
 from config import settings
 from database import get_db, index_transcript
-from services import jobs, stt, youtube, podcast_transcripts
+from services import jobs, stt, youtube, podcast_transcripts, transcription_state
 
 log = logging.getLogger(__name__)
 
@@ -39,28 +40,22 @@ async def store_transcript(db, episode_id: str, words: list[dict],
     )
     await index_transcript(db, episode_id, words_json)
     await db.execute(
-        "UPDATE episodes SET transcript_status = 'done' WHERE id = ?",
+        """UPDATE episodes SET transcript_status = 'done', transcript_progress=100,
+           transcript_stage='Transcript ready', transcript_error=NULL WHERE id = ?""",
         (episode_id,)
     )
     await db.commit()
     return words_json
 
 
-async def transcribe_episode(episode_id: str, audio_path: Path) -> None:
+async def transcribe_episode(episode_id: str, audio_path: Path, *, force: bool = False) -> None:
     """
     Transcribe episode in background thread, save words to DB.
     Updates transcript_status in episodes table throughout.
     """
     db = await get_db()
     try:
-        # Mark as processing
-        await db.execute(
-            "UPDATE episodes SET transcript_status = 'processing' WHERE id = ?",
-            (episode_id,)
-        )
-        await db.commit()
-
-        words, language = await obtain_words(episode_id, audio_path)
+        words, language = await obtain_words(episode_id, audio_path, force=force)
         words_json = json.dumps(words)
 
         # ── Meaning-based search index ───────────────────────────────────────
@@ -84,34 +79,45 @@ async def transcribe_episode(episode_id: str, audio_path: Path) -> None:
             pass  # never block the transcript result
 
     except Exception as e:
-        await db.execute(
-            "UPDATE episodes SET transcript_status = 'error' WHERE id = ?",
-            (episode_id,)
-        )
-        await db.commit()
+        await transcription_state.update(episode_id, "error", "Transcription failed", str(e))
         raise e
     finally:
         await db.close()
 
 
-async def obtain_words(episode_id: str, audio_path: Path) -> tuple[list[dict], str]:
+async def obtain_words(episode_id: str, audio_path: Path, *, force: bool = False) -> tuple[list[dict], str]:
     """Check and persist under one cross-process turn, including the INSERT."""
+    await transcription_state.update(episode_id, "queued", "Waiting for transcription")
     async with jobs.lane("stt", label=f"transcript: {episode_id}"):
-        stored = await _stored_words(episode_id)
+        stored = [] if force else await _stored_words(episode_id)
         if stored:
             words, language = stored, ""
         else:
-            words, language = await _obtain_words(episode_id, audio_path)
+            await transcription_state.update(episode_id, "processing", "Checking source transcript")
+            try:
+                words, language = await _obtain_words(episode_id, audio_path)
+            except Exception as exc:
+                await transcription_state.update(episode_id, "error", "Transcription failed", str(exc))
+                raise
         db = await get_db()
         try:
             if stored:
                 row = await db.execute_fetchone(
                     "SELECT language FROM transcripts WHERE episode_id = ?", (episode_id,))
                 language = row["language"] or "" if row else ""
-                await db.execute("UPDATE episodes SET transcript_status = 'done' WHERE id = ?",
+                await db.execute("""UPDATE episodes SET transcript_status = 'done', transcript_progress=100,
+                                 transcript_stage='Transcript ready', transcript_error=NULL WHERE id = ?""",
                                  (episode_id,))
                 await db.commit()
             else:
+                if force:
+                    # Invalidate derived caches only after a replacement exists.
+                    # User-created distillations and bookmarks retain original timestamps.
+                    await db.execute("DELETE FROM chapters WHERE episode_id=?", (episode_id,))
+                    await db.execute("DELETE FROM episode_notes WHERE episode_id=?", (episode_id,))
+                    await db.execute("""UPDATE episodes SET summary=NULL, chapters_status='none',
+                        ads_detected=NULL, adfree_path=NULL, processed_segments=NULL, trimmed_seconds=NULL
+                        WHERE id=?""", (episode_id,))
                 await store_transcript(db, episode_id, words, language=language)
         finally:
             await db.close()
@@ -134,7 +140,8 @@ async def _obtain_words(episode_id: str, audio_path: Path) -> tuple[list[dict], 
 
     log.info("%s: no source transcript; using %s", episode_id, settings.stt)
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, stt.transcribe, str(audio_path)), ""
+    return await loop.run_in_executor(None, partial(stt.transcribe, str(audio_path),
+                        progress=transcription_state.reporter(episode_id))), ""
 
 
 async def _stored_words(episode_id: str) -> list[dict]:

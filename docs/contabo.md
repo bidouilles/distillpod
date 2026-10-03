@@ -35,7 +35,7 @@ limiter. Invalid origins, oversized input and incorrect credentials are rejected
 Hash time is O(N*r*p), memory O(N*r), with fixed parameters.
 
 The image includes ffmpeg, Codex, current yt-dlp, Deno and faster-whisper.
-Transcription uses the multilingual `small` model on CPU with INT8 weights and
+Transcription uses the multilingual `medium` model on CPU with INT8 weights and
 three threads. Model files persist in `cache/`; the first use downloads them.
 `MISTRAL_API_KEY` does not select Voxtral because Compose explicitly sets
 `STT_BACKEND=whisper`. Other Mistral-backed features retain their own settings.
@@ -53,6 +53,14 @@ STT on playback. Tests: `tests/test_podcast_transcripts.py`, `tests/test_jobs.py
 Parsing costs O(input bytes + words log words), memory O(input bytes + words),
 with an 8 MiB publisher download bound. One cross-process STT lane protects
 the check, computation and transcript write, preventing duplicate work.
+Progress, the current stage and failure reasons are persisted in SQLite and
+shown on the episode page, full player and server activity panel. Retry queues
+server-side work without requiring playback. Local STT reports the fraction of
+audio decoded; source fetching and model loading show their stage without a
+made-up percentage. Restarted jobs become retryable errors unless the shared
+STT lane is still held by another process. A long STT job never bypasses its lock
+after the general lane wait ceiling. Status writes are throttled to once per
+three seconds, using the existing SQLite WAL database.
 Set `AGENT_CONFIG=/home/admin/.codex` in `.env` to use Contabo's existing Codex
 login, or leave it unset to use the private `agent/` directory. Credentials are
 never part of the image; the writable mount permits normal credential refresh.

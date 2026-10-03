@@ -222,3 +222,5 @@ class TranscriptStatus(BaseModel):
     episode_id: str
     status: str                   # none | queued | processing | done | error
     progress_percent: Optional[float] = None
+    stage: Optional[str] = None
+    error: Optional[str] = None

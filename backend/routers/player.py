@@ -110,7 +110,7 @@ async def play(req: PlayRequest):
     }
 
 
-def _start_transcription(episode_id: str, local_path: Path) -> None:
+def _start_transcription(episode_id: str, local_path: Path, *, force: bool = False) -> None:
     if episode_id in _transcribing:
         return
     _transcribing.add(episode_id)
@@ -120,7 +120,9 @@ def _start_transcription(episode_id: str, local_path: Path) -> None:
             # Someone pressed play and is watching a spinner, so this overtakes
             # whatever housekeeping is queued in the same lanes.
             with jobs.priority_scope(jobs.USER):
-                await transcribe_episode(episode_id, local_path)
+                await transcribe_episode(episode_id, local_path, force=force)
+        except Exception as exc:
+            log.warning("transcription failed for %s: %s", episode_id, exc)
         finally:
             _transcribing.discard(episode_id)
 
@@ -159,6 +161,9 @@ def _start_download(episode_id: str, audio_url: str, transcript_status: str) -> 
         except Exception as exc:
             log.warning("download failed for %s: %s", episode_id, exc)
             _downloading[episode_id] = str(exc)
+            if transcript_status != "done":
+                from services import transcription_state
+                await transcription_state.update(episode_id, "error", "Audio download failed", str(exc))
 
     asyncio.create_task(_run())
 
@@ -171,7 +176,28 @@ async def background_jobs():
     while the nightly sync held the transcription lane looked identical to the
     app being broken.
     """
-    return jobs.status()
+    result = jobs.status()
+    db = await get_db()
+    try:
+        rows = await db.execute_fetchall("""SELECT id, title, transcript_status, transcript_progress,
+            transcript_stage FROM episodes WHERE transcript_status IN ('processing','queued')
+            ORDER BY transcript_status, id""")
+    finally:
+        await db.close()
+    if rows:
+        lane = result.setdefault("stt", {"running":None, "running_for":0, "priority":"background",
+                                        "waiting":0, "queue":[], "completed":0})
+        processing = [r for r in rows if r["transcript_status"] == "processing"]
+        queued = [r for r in rows if r["transcript_status"] == "queued"]
+        if processing:
+            if not lane["running"]:
+                lane["priority"] = "external"
+            lane["running"] = " · ".join(r["title"] for r in processing)
+        lane["waiting"] = max(lane["waiting"], len(queued))
+        lane["queue"] = [r["title"] for r in queued][:5]
+        lane["transcripts"] = [{"episode_id":r["id"], "title":r["title"],
+                                "status":r["transcript_status"]} for r in rows[:5]]
+    return result
 
 
 @router.get("/download-status/{episode_id}")
@@ -247,13 +273,42 @@ async def transcript_status(episode_id: str) -> TranscriptStatus:
     db = await get_db()
     try:
         row = await db.execute_fetchone(
-            "SELECT transcript_status FROM episodes WHERE id = ?", (episode_id,)
+            """SELECT transcript_status, transcript_progress, transcript_stage, transcript_error
+               FROM episodes WHERE id = ?""", (episode_id,)
         )
     finally:
         await db.close()
     if not row:
         raise HTTPException(404, "Episode not found")
-    return TranscriptStatus(episode_id=episode_id, status=row["transcript_status"])
+    return TranscriptStatus(episode_id=episode_id, status=row["transcript_status"],
+                            progress_percent=row["transcript_progress"],
+                            stage=row["transcript_stage"], error=row["transcript_error"])
+
+
+@router.post("/transcribe/{episode_id}", status_code=202)
+async def retry_transcription(episode_id: str):
+    """Queue transcript work without starting playback; retries still check sources."""
+    db = await get_db()
+    try:
+        row = await db.execute_fetchone("SELECT * FROM episodes WHERE id=?", (episode_id,))
+        if not row:
+            raise HTTPException(404, "Episode not found")
+        if row["transcript_status"] == "done":
+            return {"status":"done"}
+        cursor = await db.execute("""UPDATE episodes SET transcript_status='queued',
+            transcript_progress=NULL, transcript_stage='Waiting for transcription', transcript_error=NULL
+            WHERE id=? AND transcript_status NOT IN ('processing','queued','done')""", (episode_id,))
+        await db.commit()
+        if cursor.rowcount == 0:
+            return {"status":row["transcript_status"]}
+    finally:
+        await db.close()
+    path = Path(row["local_path"]) if row["local_path"] else None
+    if path and path.is_file():
+        _start_transcription(episode_id, path, force=row["transcript_status"] == "error")
+    else:
+        _start_download(episode_id, row["audio_url"], "queued")
+    return {"status":"queued"}
 
 
 @router.get("/adfree-status/{episode_id}")

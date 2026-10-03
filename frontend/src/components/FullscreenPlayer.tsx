@@ -5,10 +5,11 @@ import { setActiveSource, useAudio } from "../context/AudioContext";
 import { useSaved } from "../stores/savedStore";
 import { fmtSaved, toCut, toOriginal } from "../lib/timeline";
 import {
-  getTranscriptStatus, getAdFreeStatus, getChapters, createGist,
+  getAdFreeStatus, getChapters, createGist,
   adFreeAudioUrl, bookmarkMoment,
   type AdFreeStatus, type ChaptersResult,
 } from "../api/client";
+import TranscriptionStatus, { useTranscription } from "./TranscriptionStatus";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 const SPEEDS = [1, 1.2, 1.5, 1.8, 2, 0.5];
@@ -21,33 +22,6 @@ function fmtTime(secs: number) {
   const m = Math.floor(secs / 60);
   const s = Math.floor(secs % 60);
   return `${m}:${String(s).padStart(2, "0")}`;
-}
-
-// ─── Transcript badge ──────────────────────────────────────────────────────────
-function TranscriptBadge({ status, onOpen }: { status: string; onOpen: () => void }) {
-  // A ready transcript is the entry point to reading along, so the badge that
-  // announces it is the control that opens it — no second affordance competing
-  // for room next to the playback controls.
-  if (status === "done") return (
-    <button
-      onClick={onOpen}
-      className="inline-flex items-center gap-1.5 text-xs bg-white/10 hover:bg-white/20 text-green-300 px-3 py-1.5 rounded-full transition-colors"
-    >
-      ✓ Read along
-    </button>
-  );
-  if (status === "error") return (
-    <span className="inline-flex items-center gap-1 text-xs bg-white/10 text-red-300 px-2.5 py-1 rounded-full">
-      ✗ Transcript error
-    </span>
-  );
-  if (status === "processing" || status === "queued") return (
-    <span className="inline-flex items-center gap-2 text-xs bg-white/10 text-yellow-300 px-2.5 py-1 rounded-full">
-      <span className="w-1.5 h-1.5 bg-yellow-400 rounded-full animate-pulse inline-block" />
-      Transcribing…
-    </span>
-  );
-  return null;
 }
 
 // ─── Main component ────────────────────────────────────────────────────────────
@@ -64,7 +38,8 @@ export default function FullscreenPlayer() {
   const distillSaved  = useSaved(s => s.distillSaved);
   const bookmarkSaved = useSaved(s => s.bookmarkSaved);
   // Episode-specific data
-  const [transcriptStatus, setTranscriptStatus] = useState("none");
+  const transcription = useTranscription(episode?.id);
+  const transcriptStatus = transcription.data?.status ?? "none";
   const [adFreeStatus, setAdFreeStatus]   = useState<AdFreeStatus | null>(null);
   const [useAdFree, setUseAdFree]         = useState(false);
   const [chaptersData, setChaptersData]   = useState<ChaptersResult | null>(null);
@@ -83,7 +58,6 @@ export default function FullscreenPlayer() {
   const [error, setError]                 = useState("");
   // Swipe gesture
   const touchStartY                       = useRef(0);
-  const pollRef                           = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // The clean cut runs on its own clock, so everything recorded against the
   // original — chapters, transcript timings, distills, bookmarks — is converted
@@ -133,7 +107,6 @@ export default function FullscreenPlayer() {
     if (!episode?.id) return;
     const id = episode.id;
 
-    setTranscriptStatus("none");
     setAdFreeStatus(null);
     // Reset the source choice with the episode. Left set, it applied to the
     // next episode too: its toggle rendered as "Ad-free" the moment its status
@@ -148,33 +121,9 @@ export default function FullscreenPlayer() {
     setMarkCount(0);
     setSleepOpen(false);
 
-    getTranscriptStatus(id).then(({ status }) => setTranscriptStatus(status)).catch(() => {});
     getAdFreeStatus(id).then(setAdFreeStatus).catch(() => {});
     getChapters(id).then(setChaptersData).catch(() => {});
   }, [episode?.id]);
-
-  // ── Poll transcript until done ───────────────────────────────────────────────
-  useEffect(() => {
-    if (pollRef.current) clearTimeout(pollRef.current);
-    if (!episode?.id || transcriptStatus === "done" || transcriptStatus === "error") return;
-
-    // Bug 7: Exponential backoff — start at 5s, back off up to 30s
-    const episodeId = episode.id; // capture to avoid stale closure
-    let delay = 5000;
-
-    const poll = async () => {
-      try {
-        const { status } = await getTranscriptStatus(episodeId);
-        setTranscriptStatus(status);
-        if (status === "done" || status === "error") return;
-      } catch {}
-      delay = Math.min(delay * 1.5, 30000);
-      pollRef.current = setTimeout(poll, delay) as unknown as ReturnType<typeof setInterval>;
-    };
-
-    pollRef.current = setTimeout(poll, delay) as unknown as ReturnType<typeof setInterval>;
-    return () => { if (pollRef.current) clearTimeout(pollRef.current); };
-  }, [episode?.id, transcriptStatus]);
 
   // A show can ask for the ad-free cut by default, so the toggle starts where
   // its settings say rather than always on the original. Waits for the cut to
@@ -315,6 +264,7 @@ export default function FullscreenPlayer() {
   return (
     /* Main sheet — fixed full-screen */
     <div
+      role="dialog" aria-label="Audio player" aria-hidden={!playerExpanded}
       className={`fixed inset-0 z-[60] flex flex-col overflow-hidden transition-transform duration-300 ease-out ${
         playerExpanded ? "translate-y-0" : "translate-y-full pointer-events-none"
       }`}
@@ -616,7 +566,7 @@ export default function FullscreenPlayer() {
 
             {/* ── Transcript badge ── */}
             <div className="flex justify-center pb-2">
-              <TranscriptBadge status={transcriptStatus} onOpen={() => { setChaptersOpen(false); setTranscriptOpen(true); }} />
+              <TranscriptionStatus state={transcription} onOpen={() => { setChaptersOpen(false); setTranscriptOpen(true); }} />
             </div>
           </div>
         </div>

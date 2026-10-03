@@ -59,7 +59,7 @@ def mlx_available() -> bool:
     return importlib.util.find_spec("mlx_whisper") is not None
 
 
-def transcribe(audio_path: str) -> list[dict]:
+def transcribe(audio_path: str, progress=None) -> list[dict]:
     """Blocking. Returns [{word, start, end}, ...]; raises STTError on failure."""
     backend = settings.stt
     log.info("transcribing with %s", backend)
@@ -67,7 +67,7 @@ def transcribe(audio_path: str) -> list[dict]:
         return _transcribe_voxtral(audio_path)
     if backend == "mlx":
         return _transcribe_mlx(audio_path)
-    return _transcribe_whisper(audio_path)
+    return _transcribe_whisper(audio_path, progress=progress)
 
 
 # ── Voxtral ───────────────────────────────────────────────────────────────────
@@ -261,7 +261,7 @@ def _get_model():
     return _model
 
 
-def _transcribe_whisper(audio_path: str) -> list[dict]:
+def _transcribe_whisper(audio_path: str, progress=None) -> list[dict]:
     # STT_LANGUAGE applies to both backends. Pinning it skips faster-whisper's
     # detection pass, which is a real risk on a bilingual feed: it samples only
     # the opening seconds, so an English sponsor read over a French episode can
@@ -270,8 +270,12 @@ def _transcribe_whisper(audio_path: str) -> list[dict]:
     if settings.stt_language:
         kwargs["language"] = settings.stt_language
     try:
+        if progress:
+            progress(None, "Loading local transcription model")
         model = _get_model()
-        segments, _ = model.transcribe(audio_path, **kwargs)
+        if progress:
+            progress(None, "Preparing audio")
+        segments, info = model.transcribe(audio_path, **kwargs)
     except ImportError as exc:
         raise STTError("faster-whisper is not installed; set MISTRAL_API_KEY to use voxtral") from exc
     words = []
@@ -279,6 +283,9 @@ def _transcribe_whisper(audio_path: str) -> list[dict]:
         if segment.words:
             for w in segment.words:
                 words.append({"word": w.word, "start": w.start, "end": w.end})
+        if progress:
+            total = getattr(info, "duration", 0)
+            progress(segment.end / total * 100 if total else None, "Transcribing audio")
     if not words:
         raise STTError("faster-whisper produced no words")
     return words

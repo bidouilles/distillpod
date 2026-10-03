@@ -18,7 +18,7 @@ services:
       FRONTEND_ORIGIN: https://distillpod.privatelab.eu
       TEST_MODE: "false"
       STT_BACKEND: whisper
-      WHISPER_MODEL: small
+      WHISPER_MODEL: medium
       WHISPER_DEVICE: cpu
       WHISPER_CPU_THREADS: "3"
       LLM_BIN: ""

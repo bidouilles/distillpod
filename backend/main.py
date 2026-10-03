@@ -70,6 +70,18 @@ async def startup():
     # separate process — so the turns are held through lock files both can see.
     from services import jobs
     jobs.set_lock_dir(Path(settings.db_path).parent / "locks")
+    # Cron can still be running outside a systemd restart. Recover abandoned
+    # jobs only if no process holds the shared transcription lane.
+    if not jobs.externally_locked("stt"):
+        from database import get_db
+        db = await get_db()
+        try:
+            await db.execute("""UPDATE episodes SET transcript_status='error',
+                transcript_stage='Transcription interrupted', transcript_error='Server restarted before transcription finished. Retry transcription.'
+                WHERE transcript_status IN ('processing','queued')""")
+            await db.commit()
+        finally:
+            await db.close()
 
 
 @app.get("/proxy/image")
