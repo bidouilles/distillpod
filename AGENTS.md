@@ -184,7 +184,12 @@ scripts/
   download, with the second caller waiting and then told `turn.duplicate`. The
   in-memory guards in `player.py` cannot see across processes, so the nightly
   script also skips episodes already `processing` or `queued`.
-- **A YouTube episode tries its own captions before speech-to-text.** They carry
+- **YouTube playback checks captions without falling back to speech-to-text.**
+  The shared transcript card offers **Check YouTube captions** to refresh metadata
+  when captions arrive later, and **Transcribe audio locally** as an explicit
+  fallback. `POST /player/transcribe/{id}?captions_only=true` never downloads audio
+  or invokes STT; missing captions stay retryable rather than becoming an error.
+  They carry
   word-level timings, cost nothing and arrive in seconds. The ingest path always
   did this; the play path did not, so any video the nightly caption pass had not
   reached was sent to a paid backend to re-derive a transcript YouTube would
@@ -312,7 +317,7 @@ scripts/
   video — ten of those in a row tripped YouTube's bot check and had the address
   refused for everything, single calls included, for a while afterwards. The
   transcript pass is the only part that still costs a call per video, so it is
-  capped and spaced; anything it misses transcribes on first play.
+  capped and spaced; anything it misses checks captions on first play.
 - Feed-imported and hand-added videos share one id scheme (`yt-<videoId>`), so
   subscribing to a channel cannot duplicate a video already added. The listing
   upsert is `ON CONFLICT DO NOTHING` because a hand-added row has a description

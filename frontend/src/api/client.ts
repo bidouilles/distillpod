@@ -141,8 +141,8 @@ export interface TranscriptionStatus {
 }
 export const getTranscriptStatus = (episodeId: string) =>
   req<TranscriptionStatus>("GET", `/player/transcript-status/${episodeId}`);
-export const retryTranscription = (episodeId: string) =>
-  req<{status: string}>("POST", `/player/transcribe/${episodeId}`);
+export const retryTranscription = (episodeId: string, captionsOnly = false) =>
+  req<{status: string}>("POST", `/player/transcribe/${episodeId}?captions_only=${captionsOnly}`);
 
 export const getEpisode = (episodeId: string) =>
   req<Episode>("GET", `/player/episode/${episodeId}`);

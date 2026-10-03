@@ -127,11 +127,9 @@ async def obtain_words(episode_id: str, audio_path: Path, *, force: bool = False
 async def _obtain_words(episode_id: str, audio_path: Path) -> tuple[list[dict], str]:
     """Only a confirmed absence of source transcripts permits speech-to-text."""
     if episode_id.startswith("yt-"):
-        async with jobs.lane("youtube", label=f"captions: {episode_id}"):
-            meta = await youtube.fetch_metadata(_video_url(episode_id))
-            words = await youtube.fetch_caption_words(meta)
+        words, language = await fetch_youtube_captions(episode_id)
         if words:
-            return words, youtube.caption_language(meta)
+            return words, language
     else:
         async with jobs.lane("web", label=f"publisher transcript: {episode_id}"):
             words, language = await podcast_transcripts.obtain(episode_id)
@@ -142,6 +140,41 @@ async def _obtain_words(episode_id: str, audio_path: Path) -> tuple[list[dict], 
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, partial(stt.transcribe, str(audio_path),
                         progress=transcription_state.reporter(episode_id))), ""
+
+
+async def fetch_youtube_captions(episode_id: str) -> tuple[list[dict], str]:
+    """Always refresh metadata: a newly published video's captions may arrive later."""
+    async with jobs.lane("youtube", label=f"captions: {episode_id}"):
+        meta = await youtube.fetch_metadata(_video_url(episode_id))
+        return await youtube.fetch_caption_words(meta), youtube.caption_language(meta)
+
+
+async def check_youtube_captions(episode_id: str) -> None:
+    """Caption-only job: no audio download, speech recognition, or model call."""
+    if not episode_id.startswith("yt-"):
+        raise ValueError("Caption checks require a YouTube episode")
+    try:
+        await transcription_state.update(episode_id, "queued", "Waiting to check YouTube captions")
+        # Share the transcript writer's lock so a simultaneous speech job cannot
+        # overwrite this result. Waiting is visible in the existing activity UI.
+        async with jobs.lane("stt", label=f"YouTube captions: {episode_id}"):
+            if await _stored_words(episode_id):
+                await transcription_state.update(episode_id, "done", "Transcript ready")
+                return
+            await transcription_state.update(episode_id, "processing", "Checking YouTube captions")
+            words, language = await fetch_youtube_captions(episode_id)
+            if not words:
+                await transcription_state.update(episode_id, "none",
+                    "YouTube captions are not available yet. Check again later or transcribe audio locally.")
+                return
+            db = await get_db()
+            try:
+                await store_transcript(db, episode_id, words, language)
+            finally:
+                await db.close()
+    except Exception as exc:
+        await transcription_state.update(episode_id, "error", "YouTube caption check failed", str(exc))
+        raise
 
 
 async def _stored_words(episode_id: str) -> list[dict]:

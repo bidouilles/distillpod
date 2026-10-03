@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse
 from models import PlayRequest, ProgressUpdate, TranscriptStatus, Episode
 from services import jobs
 from services.downloader import download_episode, episode_local_path
-from services.transcriber import transcribe_episode
+from services.transcriber import transcribe_episode, check_youtube_captions
 from database import get_db
 from config import settings
 from pathlib import Path
@@ -88,7 +88,7 @@ async def play(req: PlayRequest):
             req.episode_id, req.audio_url,
             row["transcript_status"] if transcribe else "done",
         )
-    elif transcribe and row["transcript_status"] not in ("done", "processing"):
+    elif transcribe and row["transcript_status"] not in ("done", "processing", "queued"):
         _start_transcription(req.episode_id, local_path)
 
     return {
@@ -110,9 +110,11 @@ async def play(req: PlayRequest):
     }
 
 
-def _start_transcription(episode_id: str, local_path: Path, *, force: bool = False) -> None:
+def _start_transcription(episode_id: str, local_path: Path, *, force: bool = False,
+                         captions_only: bool | None = None) -> None:
     if episode_id in _transcribing:
         return
+    check_captions = episode_id.startswith("yt-") if captions_only is None else captions_only
     _transcribing.add(episode_id)
 
     async def _run():
@@ -120,7 +122,10 @@ def _start_transcription(episode_id: str, local_path: Path, *, force: bool = Fal
             # Someone pressed play and is watching a spinner, so this overtakes
             # whatever housekeeping is queued in the same lanes.
             with jobs.priority_scope(jobs.USER):
-                await transcribe_episode(episode_id, local_path, force=force)
+                if check_captions:
+                    await check_youtube_captions(episode_id)
+                else:
+                    await transcribe_episode(episode_id, local_path, force=force)
         except Exception as exc:
             log.warning("transcription failed for %s: %s", episode_id, exc)
         finally:
@@ -129,7 +134,8 @@ def _start_transcription(episode_id: str, local_path: Path, *, force: bool = Fal
     asyncio.create_task(_run())
 
 
-def _start_download(episode_id: str, audio_url: str, transcript_status: str) -> None:
+def _start_download(episode_id: str, audio_url: str, transcript_status: str, *,
+                    captions_only: bool | None = None) -> None:
     """Fetch the audio in the background.
 
     Awaiting the download inside /play held the request open for as long as it
@@ -156,8 +162,9 @@ def _start_download(episode_id: str, audio_url: str, transcript_status: str) -> 
             finally:
                 await db.close()
             _downloading.pop(episode_id, None)
-            if transcript_status not in ("done", "processing"):
-                _start_transcription(episode_id, path)
+            if transcript_status not in ("done", "processing", "queued") or (
+                    transcript_status == "queued" and captions_only is False):
+                _start_transcription(episode_id, path, captions_only=captions_only)
         except Exception as exc:
             log.warning("download failed for %s: %s", episode_id, exc)
             _downloading[episode_id] = str(exc)
@@ -286,28 +293,34 @@ async def transcript_status(episode_id: str) -> TranscriptStatus:
 
 
 @router.post("/transcribe/{episode_id}", status_code=202)
-async def retry_transcription(episode_id: str):
-    """Queue transcript work without starting playback; retries still check sources."""
+async def retry_transcription(episode_id: str, captions_only: bool = False):
+    """Queue work without playback; caption-only checks never fall back to STT."""
     db = await get_db()
     try:
         row = await db.execute_fetchone("SELECT * FROM episodes WHERE id=?", (episode_id,))
         if not row:
             raise HTTPException(404, "Episode not found")
+        if captions_only and not episode_id.startswith("yt-"):
+            raise HTTPException(400, "Caption checks require a YouTube episode")
         if row["transcript_status"] == "done":
             return {"status":"done"}
         cursor = await db.execute("""UPDATE episodes SET transcript_status='queued',
-            transcript_progress=NULL, transcript_stage='Waiting for transcription', transcript_error=NULL
-            WHERE id=? AND transcript_status NOT IN ('processing','queued','done')""", (episode_id,))
+            transcript_progress=NULL, transcript_stage=?, transcript_error=NULL
+            WHERE id=? AND transcript_status NOT IN ('processing','queued','done')""",
+            ("Waiting to check YouTube captions" if captions_only else "Waiting for transcription", episode_id))
         await db.commit()
         if cursor.rowcount == 0:
             return {"status":row["transcript_status"]}
     finally:
         await db.close()
+    if captions_only:
+        _start_transcription(episode_id, Path(), captions_only=True)
+        return {"status":"queued"}
     path = Path(row["local_path"]) if row["local_path"] else None
     if path and path.is_file():
-        _start_transcription(episode_id, path, force=row["transcript_status"] == "error")
+        _start_transcription(episode_id, path, force=row["transcript_status"] == "error", captions_only=False)
     else:
-        _start_download(episode_id, row["audio_url"], "queued")
+        _start_download(episode_id, row["audio_url"], "queued", captions_only=False)
     return {"status":"queued"}
 
 
