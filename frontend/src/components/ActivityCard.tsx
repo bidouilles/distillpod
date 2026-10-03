@@ -89,7 +89,7 @@ export default function ActivityCard() {
                     </span>
                   )}
                   <span className="flex-1" />
-                  {lane.running && (
+                  {lane.running && (lane.running_for > 0 || lane.priority !== "external") && (
                     <span className="text-[11px] text-gray-500 font-mono flex-shrink-0">
                       {fmtElapsed(lane.running_for)}
                     </span>
