@@ -85,11 +85,26 @@ def _ytdlp() -> str:
 
 def _run(args: list[str], timeout: int) -> subprocess.CompletedProcess:
     """Blocking yt-dlp call. Raises YouTubeError with the tail of stderr."""
+    cookie_values: list[str] = []
     try:
-        return subprocess.run(
-            [_ytdlp(), *args], capture_output=True, text=True,
-            check=True, timeout=timeout,
-        )
+        # yt-dlp writes back its cookie jar. Each call gets a private disposable
+        # copy so read-only mounts work and concurrent calls cannot corrupt it.
+        with tempfile.TemporaryDirectory(prefix="distillpod-yt-auth-") as tmp:
+            command = [_ytdlp(), *args]
+            if settings.ytdlp_cookies_file:
+                try:
+                    content = Path(settings.ytdlp_cookies_file).read_bytes()
+                except OSError as exc:
+                    raise YouTubeError("Configured YouTube cookie file is missing or unreadable") from exc
+                cookie_file = Path(tmp) / "cookies.txt"
+                cookie_file.touch(mode=0o600)
+                cookie_file.write_bytes(content)
+                cookie_values = [line.split("\t")[-1] for line in
+                                 content.decode("utf-8", errors="replace").splitlines()
+                                 if len(line.split("\t")) == 7 and len(line.split("\t")[-1]) >= 8]
+                command[1:1] = ["--cookies", str(cookie_file)]
+            return subprocess.run(command, capture_output=True, text=True,
+                                  check=True, timeout=timeout)
     except FileNotFoundError as exc:
         raise YouTubeError(
             "yt-dlp is not installed or not on PATH (set YTDLP_BIN)"
@@ -98,7 +113,10 @@ def _run(args: list[str], timeout: int) -> subprocess.CompletedProcess:
         raise YouTubeError(f"yt-dlp timed out after {timeout}s") from exc
     except subprocess.CalledProcessError as exc:
         tail = (exc.stderr or "").strip().splitlines()[-3:]
-        raise YouTubeError("yt-dlp failed: " + " / ".join(tail)) from exc
+        message = " / ".join(tail)
+        for value in cookie_values:
+            message = message.replace(value, "[redacted]")
+        raise YouTubeError("yt-dlp failed: " + message) from None
 
 
 # /@handle, /channel/UC…, /c/name, /user/name — with or without a trailing

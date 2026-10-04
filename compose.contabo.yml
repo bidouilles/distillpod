@@ -23,6 +23,7 @@ services:
       WHISPER_CPU_THREADS: "3"
       LLM_BIN: ""
       YTDLP_BIN: ""
+      YTDLP_COOKIES_FILE: /run/secrets/youtube-cookies.txt
       CODEX_HOME: /home/app/.codex
     volumes:
       - ./data:/app/data
@@ -30,6 +31,7 @@ services:
       - ./reports:/app/reports
       - ${AGENT_CONFIG:-./agent}:/home/app/.codex
       - ./cache:/home/app/.cache
+      - ./secrets/youtube-cookies.txt:/run/secrets/youtube-cookies.txt:ro
     read_only: true
     tmpfs:
       - /tmp:rw,size=1g,mode=1777

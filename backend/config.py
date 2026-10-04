@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     # yt-dlp, for ingesting YouTube videos as episodes.
     ytdlp_bin: str = ""    # explicit path; resolved via PATH when empty
+    ytdlp_cookies_file: str = ""  # optional Netscape cookie jar, kept outside Git
 
     # Storage
     media_dir: Path = Path("media")

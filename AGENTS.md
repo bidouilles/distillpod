@@ -75,6 +75,7 @@ Env file: `/etc/distillpod.env` (mode 600, owned by root, loaded via `Environmen
 | `WHISPER_MODEL` | Whisper model size (default: `medium`) |
 | `WHISPER_DEVICE` | Whisper device (default: `cpu`) |
 | `YTDLP_BIN` | Path to `yt-dlp` (optional, falls back to PATH) |
+| `YTDLP_COOKIES_FILE` | Private Netscape YouTube cookie jar; copied to a temporary 600-mode file per call because yt-dlp writes its jar |
 | `TELEGRAM_BOT_TOKEN` | Telegram notifications (optional) |
 | `TELEGRAM_CHAT_ID` | Telegram chat ID (optional) |
 
